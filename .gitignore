@@ -21,3 +21,6 @@ data/raw/
 03-coral-trout-reef-monitoring/data/*.txt
 06-bayesian-inference-methods/data/*.txt
 01-energy-emissions-dashboard/data/*.xlsx
+
+# Internal handoff notes for DeepCode (not published)
+_handoff/
