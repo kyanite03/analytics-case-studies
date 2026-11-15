@@ -2,7 +2,7 @@
 
 ![Dashboard screenshot](figures/screenshot.png)
 
-**Live demo → [dashboard.ksmarsh.net](https://dashboard.ksmarsh.net)** (coming soon) · current version: [shinyapps.io](https://z0q49p-kai-marsh.shinyapps.io/energy_app/)
+**Live demo → [open the dashboard](https://z0q49p-kai-marsh.shinyapps.io/energy_app/)** (shinyapps.io; may take a few seconds to wake up)
 
 **Executive summary**
 - Question: what 2050 electricity mix gets Australia to its Paris net-zero target, and how much forest would be needed to offset whatever is left?
@@ -24,4 +24,4 @@
 
 **Companion piece**: [*The Myth of Energy Transitions*](companion-video-essay/script.md), a short data-storytelling video essay (script and slides).
 **Tools**: R · Shiny · ggplot2 · dplyr/tidyr · sf · ozmaps · Shinylive (webR)
-**Reproduce**: see [`DEPLOY_NOTES.md`](DEPLOY_NOTES.md). In short, `renv::restore()`, then `shiny::runApp("app")` or `shinylive::export("app", "site")`.
+**Reproduce**: R 4.5 with package versions pinned in `app/renv.lock`. Run `renv::restore(project = "app")`, then `shiny::runApp("app")`.

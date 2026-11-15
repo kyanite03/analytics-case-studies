@@ -22,5 +22,5 @@ data/raw/
 06-bayesian-inference-methods/data/*.txt
 01-energy-emissions-dashboard/data/*.xlsx
 
-# Internal handoff notes for DeepCode (not published)
+# Local working notes
 _handoff/

@@ -4,7 +4,7 @@ Applied statistics and data analysis by Kai Marsh, BCom (Finance & Statistics) a
 
 | # | Case study | Question | Methods | Output |
 |---|-----------|----------|---------|--------|
-| 01 | [Energy emissions dashboard](01-energy-emissions-dashboard/) | What 2050 electricity mix gets Australia to net zero? | R Shiny, sf, scenario modelling | [Live demo](https://dashboard.ksmarsh.net) (coming soon) · [shinyapps.io](https://z0q49p-kai-marsh.shinyapps.io/energy_app/) |
+| 01 | [Energy emissions dashboard](01-energy-emissions-dashboard/) | What 2050 electricity mix gets Australia to net zero? | R Shiny, sf, scenario modelling | [Live demo](https://z0q49p-kai-marsh.shinyapps.io/energy_app/) |
 | 02 | [Gallstone disease prediction](02-gallstone-disease-prediction/) | Can routine blood tests flag gallstone patients before imaging? | Logistic regression, random forest, XGBoost | [Report](02-gallstone-disease-prediction/report.pdf) |
 | 03 | [Coral trout reef monitoring](03-coral-trout-reef-monitoring/) | Do no-take zones hold more fish, and can lost reef records be rebuilt? | Poisson / quasi-Poisson GLM, mixture models, EM | [Report](03-coral-trout-reef-monitoring/report.pdf) |
 | 04 | [Equity return clustering](04-equity-return-clustering/) | How much of Dow Jones co-movement is one market factor? | PCA / eigen-analysis, k-means | [Report](04-equity-return-clustering/report.pdf) |
@@ -13,4 +13,8 @@ Applied statistics and data analysis by Kai Marsh, BCom (Finance & Statistics) a
 
 The work began as university projects (University of Melbourne and RMIT, 2025–26) and has been rewritten as independent analyses. Client scenarios are illustrative. Data sources and licences are listed in each folder's `data/README.md`.
 
-Contact: kai@ksmarsh.net · [ksmarsh.net](https://ksmarsh.net) · LinkedIn
+## Licence
+Source code is released under the [MIT License](LICENSE). The written reports, analysis text, figures, and the video-essay script and slides are © 2025–2026 Kai Marsh, all rights reserved. Third-party datasets remain under their original licences, listed in each case study's `data/README.md`.
+
+## Contact
+kai@ksmarsh.net · [LinkedIn](https://www.linkedin.com/in/kai-marsh)
