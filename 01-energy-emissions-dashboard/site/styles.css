@@ -67,3 +67,8 @@ p.subtitle { color: #555; margin-top: 0; }
   .two-col { grid-template-columns: 1fr; }
   h1.title { font-size: 1.5rem; }
 }
+
+/* Model equations under each chart (same pattern as the CDEG models) */
+.eq-box { border-left: 3px solid #2a78d6; background: #f7f9fc; border-radius: 0 6px 6px 0; padding: .35rem .9rem .5rem; margin: .5rem 0 1.25rem; }
+.eq-box .katex-display { margin: .35rem 0; overflow-x: auto; overflow-y: hidden; padding: .1rem 0; }
+.eq-box .eq-defs, .eq-box .eq-defs p { font-size: .8rem; color: #52514e; line-height: 1.45; margin: .2rem 0 0; }

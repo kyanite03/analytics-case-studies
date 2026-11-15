@@ -1,6 +1,8 @@
 project:
   type: website
   output-dir: ../site
+  resources:
+    - katex/
 
 website:
   title: "Australia's Net Zero Electricity Pathways"
@@ -12,3 +14,7 @@ format:
     toc: false
     embed-resources: false
     page-layout: full
+    # Vendored KaTeX: no CDN, so the page also loads where jsdelivr is blocked
+    html-math-method:
+      method: katex
+      url: "katex/"
