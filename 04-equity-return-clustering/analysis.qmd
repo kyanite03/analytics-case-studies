@@ -5,6 +5,7 @@ author: "Kai Marsh"
 format:
   html:
     output-file: report.html
+    css: ../eq-box.css
     toc: true
     embed-resources: true
     theme: cosmo
@@ -77,6 +78,14 @@ plot(cumsum(share), type = "b", pch = 19, ylim = c(0, 1), xlab = "Number of comp
 abline(h = 0.8, lty = 2, col = "grey50")
 ```
 
+::: {.eq-box}
+$$\mathbf S = \frac{1}{T-1}\sum_{t=1}^{T}(\mathbf r_t - \bar{\mathbf r})(\mathbf r_t - \bar{\mathbf r})' = \mathbf V\boldsymbol\Lambda\mathbf V', \qquad \text{cumulative share}_k = \frac{\sum_{j=1}^{k}\lambda_j}{\sum_{j=1}^{30}\lambda_j}$$
+
+::: {.eq-defs}
+$\mathbf r_t$ vector of the 30 stocks' returns on day $t$ · $T$ = 1,200 days · $\mathbf S$ sample covariance matrix · $\lambda_j$ $j$-th eigenvalue (left panel), the return variance carried by component $j$ · right panel plots the cumulative share against $k$, with 80% dashed.
+:::
+:::
+
 The covariance matrix has full rank (30), so no stock's return is an exact combination of the others. The first component explains `r sprintf("%.1f%%", 100 * share[1])` of total return variance, far more than any other component (@fig-scree). This is the familiar **market factor**: most of the time, Dow stocks rise and fall together. The remaining variance is spread over many small components, which reflect sector and stock-specific moves.
 
 ```{r}
@@ -93,6 +102,14 @@ plot(L, pch = 19, col = c("steelblue", "firebrick")[km_s$cluster],
 text(L, labels = rownames(L), pos = 3, cex = 0.7)
 abline(h = 0, lty = 3)
 ```
+
+::: {.eq-box}
+$$\text{PC}_{j,t} = \mathbf v_j'(\mathbf r_t - \bar{\mathbf r}), \qquad \min_{C_1, C_2}\; \sum_{c=1}^{2}\sum_{i \in C_c} \lVert \mathbf x_i - \boldsymbol\mu_c \rVert^2$$
+
+::: {.eq-defs}
+$\mathbf v_j$ eigenvector $j$ of $\mathbf S$; its entries are the stocks' loadings (axes) · $\mathbf x_i \in \mathbb R^{1200}$ stock $i$'s series of daily returns · $C_c$ k-means cluster $c$ (colours) · $\boldsymbol\mu_c$ its centroid.
+:::
+:::
 
 ## 2. Which stocks move together?
 
@@ -135,6 +152,14 @@ matplot(WB$k, cbind(WB$W, WB$B), type = "b", pch = c(19, 17), lty = 1,
         main = "W and B versus number of day-clusters")
 legend("right", c("W (within)", "B (between)"), pch = c(19, 17), col = c("black", "firebrick"), bty = "n")
 ```
+
+::: {.eq-box}
+$$\underbrace{\sum_{t}\lVert\mathbf r_t - \bar{\mathbf r}\rVert^2}_{\text{total (fixed)}} = \underbrace{\sum_{c=1}^{k}\sum_{t \in C_c}\lVert\mathbf r_t - \boldsymbol\mu_c\rVert^2}_{W} + \underbrace{\sum_{c=1}^{k} n_c\,\lVert\boldsymbol\mu_c - \bar{\mathbf r}\rVert^2}_{B}$$
+
+::: {.eq-defs}
+$\mathbf r_t$ day $t$'s vector of 30 returns · $C_c$ the days in cluster $c$ · $n_c$ their number · $\boldsymbol\mu_c$ cluster centroid · $\bar{\mathbf r}$ overall mean. k-means minimises $W$, so as $k$ rises $W$ falls and $B$ rises by the same amount.
+:::
+:::
 
 $W$ falls and $B$ rises as $k$ grows, as they must, since $W + B$ is fixed (@fig-wb). There is no clear elbow: each extra cluster removes only a modest share of $W$ (the `W_drop_pct` column), and the gains shrink steadily.
 

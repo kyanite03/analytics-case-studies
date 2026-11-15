@@ -2337,6 +2337,11 @@ window.Quarto = {
 };
 </script>
 
+<style type="text/css">
+.eq-box { border-left: 3px solid #2a78d6; background: #f7f9fc; border-radius: 0 6px 6px 0; padding: .35rem .9rem .5rem; margin: .5rem 0 1.25rem; }
+.eq-box mjx-container[display="true"] { margin: .35rem 0 !important; overflow-x: auto; overflow-y: hidden; padding: .1rem 0; }
+.eq-box .eq-defs, .eq-box .eq-defs p { font-size: .8rem; color: #52514e; line-height: 1.45; margin: .2rem 0 0; }
+</style>
 </head>
 
 <body class="quarto-light">
@@ -2479,6 +2484,12 @@ Figure 1: Scree plot of covariance eigenvalues (left) and cumulative share of r
 </div>
 </div>
 </div>
+<div class="eq-box">
+<p><span class="math display">\[\mathbf S = \frac{1}{T-1}\sum_{t=1}^{T}(\mathbf r_t - \bar{\mathbf r})(\mathbf r_t - \bar{\mathbf r})&#39; = \mathbf V\boldsymbol\Lambda\mathbf V&#39;, \qquad \text{cumulative share}_k = \frac{\sum_{j=1}^{k}\lambda_j}{\sum_{j=1}^{30}\lambda_j}\]</span></p>
+<div class="eq-defs">
+<p><span class="math inline">\(\mathbf r_t\)</span> vector of the 30 stocks’ returns on day <span class="math inline">\(t\)</span> · <span class="math inline">\(T\)</span> = 1,200 days · <span class="math inline">\(\mathbf S\)</span> sample covariance matrix · <span class="math inline">\(\lambda_j\)</span> <span class="math inline">\(j\)</span>-th eigenvalue (left panel), the return variance carried by component <span class="math inline">\(j\)</span> · right panel plots the cumulative share against <span class="math inline">\(k\)</span>, with 80% dashed.</p>
+</div>
+</div>
 <p>The covariance matrix has full rank (30), so no stock’s return is an exact combination of the others. The first component explains 28.2% of total return variance, far more than any other component (<a href="#fig-scree" class="quarto-xref">Figure 1</a>). This is the familiar <strong>market factor</strong>: most of the time, Dow stocks rise and fall together. The remaining variance is spread over many small components, which reflect sector and stock-specific moves.</p>
 <div class="cell">
 <details class="code-fold">
@@ -2503,6 +2514,12 @@ Figure 2: Stock loadings on the first two principal components. PC1 loadings sh
 </figcaption>
 </figure>
 </div>
+</div>
+</div>
+<div class="eq-box">
+<p><span class="math display">\[\text{PC}_{j,t} = \mathbf v_j&#39;(\mathbf r_t - \bar{\mathbf r}), \qquad \min_{C_1, C_2}\; \sum_{c=1}^{2}\sum_{i \in C_c} \lVert \mathbf x_i - \boldsymbol\mu_c \rVert^2\]</span></p>
+<div class="eq-defs">
+<p><span class="math inline">\(\mathbf v_j\)</span> eigenvector <span class="math inline">\(j\)</span> of <span class="math inline">\(\mathbf S\)</span>; its entries are the stocks’ loadings (axes) · <span class="math inline">\(\mathbf x_i \in \mathbb R^{1200}\)</span> stock <span class="math inline">\(i\)</span>’s series of daily returns · <span class="math inline">\(C_c\)</span> k-means cluster <span class="math inline">\(c\)</span> (colours) · <span class="math inline">\(\boldsymbol\mu_c\)</span> its centroid.</p>
 </div>
 </div>
 </section>
@@ -2576,6 +2593,12 @@ Figure 3: Within-cluster (W) and between-cluster (B) sums of squares against th
 </figcaption>
 </figure>
 </div>
+</div>
+</div>
+<div class="eq-box">
+<p><span class="math display">\[\underbrace{\sum_{t}\lVert\mathbf r_t - \bar{\mathbf r}\rVert^2}_{\text{total (fixed)}} = \underbrace{\sum_{c=1}^{k}\sum_{t \in C_c}\lVert\mathbf r_t - \boldsymbol\mu_c\rVert^2}_{W} + \underbrace{\sum_{c=1}^{k} n_c\,\lVert\boldsymbol\mu_c - \bar{\mathbf r}\rVert^2}_{B}\]</span></p>
+<div class="eq-defs">
+<p><span class="math inline">\(\mathbf r_t\)</span> day <span class="math inline">\(t\)</span>’s vector of 30 returns · <span class="math inline">\(C_c\)</span> the days in cluster <span class="math inline">\(c\)</span> · <span class="math inline">\(n_c\)</span> their number · <span class="math inline">\(\boldsymbol\mu_c\)</span> cluster centroid · <span class="math inline">\(\bar{\mathbf r}\)</span> overall mean. k-means minimises <span class="math inline">\(W\)</span>, so as <span class="math inline">\(k\)</span> rises <span class="math inline">\(W\)</span> falls and <span class="math inline">\(B\)</span> rises by the same amount.</p>
 </div>
 </div>
 <p><span class="math inline">\(W\)</span> falls and <span class="math inline">\(B\)</span> rises as <span class="math inline">\(k\)</span> grows, as they must, since <span class="math inline">\(W + B\)</span> is fixed (<a href="#fig-wb" class="quarto-xref">Figure 3</a>). There is no clear elbow: each extra cluster removes only a modest share of <span class="math inline">\(W\)</span> (the <code>W_drop_pct</code> column), and the gains shrink steadily.</p>

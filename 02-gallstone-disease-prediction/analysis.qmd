@@ -5,6 +5,7 @@ author: "Kai Marsh"
 format:
   html:
     output-file: report.html
+    css: ../eq-box.css
     toc: true
     toc-depth: 2
     number-sections: false
@@ -269,6 +270,14 @@ fig.tight_layout()
 plt.show()
 ```
 
+::: {.eq-box}
+$$\text{TPR}(c) = \Pr(\hat p > c \mid y = 1), \qquad \text{FPR}(c) = \Pr(\hat p > c \mid y = 0), \qquad \text{AUC} = \Pr\big(\hat p_{+} > \hat p_{-}\big)$$
+
+::: {.eq-defs}
+$\hat p$ a model's predicted probability of gallstones for a test patient · $y$ true status (1 = gallstones) · $c$ classification threshold, swept from 1 to 0 to trace each curve · $\hat p_{+}$, $\hat p_{-}$ predictions for a randomly chosen positive and negative patient. AUC is the area under the curve: 0.5 is guessing, 1 is perfect ranking.
+:::
+:::
+
 ## Are the differences real?
 
 ```{python}
@@ -288,6 +297,14 @@ Markdown(cv_table.to_markdown(floatfmt=".3f"))
 
 Markdown(comparisons.to_markdown(floatfmt=("", "+.3f", ".2f")))
 ```
+
+::: {.eq-box}
+$$t = \frac{\bar d}{\sqrt{\left(\dfrac{1}{k} + \dfrac{n_{\text{test}}}{n_{\text{train}}}\right) s_d^2}} \;\sim\; t_{k-1}$$
+
+::: {.eq-defs}
+$\bar d$, $s_d^2$ mean and variance of the per-fold AUC differences between two models · $k$ = 50 folds (10 × 5-fold) · $n_{\text{test}}/n_{\text{train}} = 1/4$ for 5-fold CV. The second term inflates the variance because folds share training patients (Nadeau and Bengio, 2003); a plain paired t-test drops it.
+:::
+:::
 
 Cross-validated AUCs range from `{python} f"{min(cv_mean.values()):.3f}"` to `{python} f"{max(cv_mean.values()):.3f}"`, and the fold-to-fold standard deviation (about 0.07–0.08) is well over double the largest gap between models. None of the corrected comparisons is significant at the 5% level. **The data do not support choosing one model on accuracy grounds.** That favours logistic regression, because its coefficients can be read and checked by clinicians.
 
@@ -326,6 +343,14 @@ fig.tight_layout()
 fig.savefig("figures/key_chart.png", bbox_inches="tight", facecolor="white")
 plt.show()
 ```
+
+::: {.eq-box}
+$$\log\frac{p}{1-p} = \beta_0 + \sum_{j \in \mathcal S} \beta_j z_j, \qquad z_j = \frac{x_j - \bar x_j}{s_j}, \qquad \text{OR}_j = e^{\beta_j}$$
+
+::: {.eq-defs}
+$p$ probability of gallstones · $\mathcal S$ the `{python} K` features with the largest ANOVA F-scores on the training set · $z_j$ feature $j$ standardised by its training mean and SD · $\beta_j$ fitted with an L2 penalty, $\min_{\boldsymbol\beta}\, -\ell(\boldsymbol\beta) + \tfrac{1}{2C}\lVert\boldsymbol\beta\rVert^2$, $C$ chosen by cross-validation · $\text{OR}_j$ multiplicative change in the odds per one-SD increase in feature $j$ (the plotted value).
+:::
+:::
 
 - **Vitamin D** has the largest ANOVA F-score of any feature and a strong inverse association (odds ratio `{python} f"{or_vitd:.2f}"` per SD). This is consistent with published links between vitamin D deficiency and gallstone formation.
 - **CRP** is the strongest risk-raising feature (odds ratio `{python} f"{or_crp:.2f}"` per SD). This fits inflammation that accompanies gallbladder disease, so it may be partly a *consequence* rather than a cause.
