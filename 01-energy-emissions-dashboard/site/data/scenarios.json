@@ -1,0 +1,1 @@
+[{"key":"low","label":"Low electrification","demand_2050_twh":400,"non_electric_2050_mt":130},{"key":"central","label":"AEMO Step Change (central)","demand_2050_twh":500,"non_electric_2050_mt":90},{"key":"high","label":"High electrification","demand_2050_twh":620,"non_electric_2050_mt":60}]

@@ -1,0 +1,47 @@
+/* Static dashboard styles */
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 0.5rem 1.2rem 2rem;
+}
+h1.title { font-size: 2rem; margin-bottom: 0.1rem; }
+p.subtitle { color: #555; margin-top: 0; }
+.controls-heading { margin-top: 1.2rem; }
+.controls {
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 0.8rem 1rem;
+  background: #fafaf7;
+  display: grid;
+  gap: 0.6rem;
+}
+.ctrl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.6rem;
+}
+.ctrl-actions { display: flex; gap: 0.8rem; align-items: center; }
+.ok   { color: #0b5e2a; font-weight: 600; }
+.warn { color: #a02020; font-weight: 600; }
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.map-wrap { width: 100%; }
+.map-caption { margin-top: 0.4rem; color: #333; font-size: 0.95rem; }
+.status-card { border-radius: 10px; padding: 0.8rem 1.1rem; margin: 0.8rem 0; }
+.status-card.pass { background: #e8f5ec; border: 1px solid #2c8a4a; }
+.status-card.fail { background: #fdeaea; border: 1px solid #c0392b; }
+.status-head { font-size: 1.25rem; font-weight: 700; }
+.status-card p { margin: 0.35rem 0; }
+.small { font-size: 0.85rem; color: #555; }
+.assumptions { font-size: 0.92rem; }
+.assumptions li { margin-bottom: 0.35rem; }
+.refs summary { cursor: pointer; font-weight: 600; }
+.refs pre { white-space: pre-wrap; font-size: 0.85rem; }
+@media (max-width: 900px) {
+  .two-col { grid-template-columns: 1fr; }
+  h1.title { font-size: 1.5rem; }
+}

@@ -1,0 +1,14 @@
+project:
+  type: website
+  output-dir: ../site
+
+website:
+  title: "Make Australia Green Again!"
+  page-navigation: false
+
+format:
+  html:
+    theme: cosmo
+    toc: false
+    embed-resources: false
+    page-layout: full
