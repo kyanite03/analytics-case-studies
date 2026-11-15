@@ -1,0 +1,146 @@
+---
+title: "Dow Jones 30: Covariance Structure and Clustering"
+subtitle: "Eigen-analysis and k-means clustering of daily stock returns"
+author: "Kai Marsh"
+format:
+  html:
+    output-file: report.html
+    toc: true
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    code-summary: "Show code"
+  pdf:
+    output-file: report.pdf
+    toc: true
+    number-sections: false
+    geometry: margin=2.2cm
+    pdf-engine: xelatex
+    fig-pos: "H"
+    echo: false
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+::: {.callout-note title="About this report"}
+This is an unsupervised look at the daily returns of the 30 Dow Jones Industrial Average constituents. It asks three questions: how much of the co-movement is driven by a single common factor, which stocks naturally group together, and whether trading days fall into distinct "regimes". It was originally done as coursework for a university machine-learning course (RMIT, 2025) and has been consolidated here into a single reproducible report.
+:::
+
+::: {.callout-tip title="Key findings"}
+- **One market factor dominates:** the first principal component explains 28.2% of daily return variance, more than three times the second (7.9%).
+- **Technology stocks form their own cluster:** k-means separates HWP, INTC, IBM and MSFT. Their average pairwise correlation is 0.44, against 0.20 with the rest of the index, so holding several of them diversifies less than the ticker count suggests.
+- **Trading days don't fall into discrete regimes:** clustering days mainly splits market-up from market-down days (+0.89% vs −0.75% average return), with no clear elbow in within-cluster variance.
+:::
+
+## Data
+
+The data are daily returns for 30 Dow Jones constituents (2,527 trading days; tickers such as HWP, EK and SBC date the sample to the pre-2005 index). The analysis uses a 1,200-day window, days 1201–2400.
+
+```{r}
+#| label: load
+dj <- read.csv("data/dj30_daily_returns.csv", check.names = FALSE)
+dj[] <- lapply(dj, function(x) as.numeric(as.character(x)))
+R <- as.matrix(dj[1201:2400, ])          # 1200 days x 30 stocks
+stopifnot(!anyNA(R))
+dim(R)
+```
+
+## 1. Covariance structure: is there a market factor?
+
+Treating stocks as variables, the $30 \times 30$ sample covariance matrix of returns is eigen-decomposed. If one eigenvalue dominates, a single common "market" factor drives most of the joint movement.
+
+```{r}
+#| label: eigen
+S   <- cov(R)
+ev  <- eigen(S, symmetric = TRUE)
+lam <- ev$values
+share <- lam / sum(lam)
+data.frame(
+  quantity = c("Covariance matrix", "Numerical rank", "Largest eigenvalue",
+               "Smallest eigenvalue", "Share of variance, PC1", "Share, PC1-PC3"),
+  value = c("30 x 30", sum(lam > max(lam) * 30 * .Machine$double.eps),
+            signif(lam[1], 4), signif(lam[30], 4),
+            sprintf("%.1f%%", 100 * share[1]), sprintf("%.1f%%", 100 * sum(share[1:3]))))
+```
+
+```{r}
+#| label: fig-scree
+#| fig-cap: "Scree plot of covariance eigenvalues (left) and cumulative share of return variance explained (right)."
+#| fig-width: 10
+#| fig-height: 4
+par(mfrow = c(1, 2))
+plot(lam, type = "b", pch = 19, xlab = "Component", ylab = "Eigenvalue", main = "Scree plot")
+plot(cumsum(share), type = "b", pch = 19, ylim = c(0, 1), xlab = "Number of components",
+     ylab = "Cumulative share of variance", main = "Cumulative variance explained")
+abline(h = 0.8, lty = 2, col = "grey50")
+```
+
+The covariance matrix has full rank (30), so no stock's return is an exact combination of the others. The first component explains `r sprintf("%.1f%%", 100 * share[1])` of total return variance, far more than any other component (@fig-scree). This is the familiar **market factor**: most of the time, Dow stocks rise and fall together. The remaining variance is spread over many small components, which reflect sector and stock-specific moves.
+
+```{r}
+#| label: fig-loadings
+#| fig-cap: "Stock loadings on the first two principal components. PC1 loadings share a sign (the market factor); PC2 separates a group of technology stocks from the rest."
+#| fig-width: 7
+#| fig-height: 6
+L <- ev$vectors[, 1:2]; if (mean(L[, 1]) < 0) L[, 1] <- -L[, 1]
+rownames(L) <- colnames(R)
+set.seed(2025)
+km_s <- kmeans(t(R), centers = 2, nstart = 25, iter.max = 50)
+plot(L, pch = 19, col = c("steelblue", "firebrick")[km_s$cluster],
+     xlab = "PC1 loading (market)", ylab = "PC2 loading", main = "Stock loadings, coloured by k-means cluster")
+text(L, labels = rownames(L), pos = 3, cex = 0.7)
+abline(h = 0, lty = 3)
+```
+
+## 2. Which stocks move together?
+
+Each stock is treated as an observation, described by its 1,200 daily returns, and grouped with k-means ($k = 2$, 25 random starts).
+
+```{r}
+#| label: stock-clusters
+small <- which.min(km_s$size)
+km_s$size
+colnames(R)[km_s$cluster == small]
+```
+
+k-means splits off a small group of **`r sum(km_s$cluster == small)` stocks (`r paste(colnames(R)[km_s$cluster == small], collapse = ", ")`)** from the other `r sum(km_s$cluster != small)`. These are the technology names in the index. They include the most volatile stocks in the index (HWP and INTC have the highest daily standard deviations). Their average pairwise correlation is about 0.44, against about 0.20 with the other 26 stocks, which is consistent with their separation on PC2 in @fig-loadings. For portfolio construction, this means that holding several of these names adds less diversification than the ticker count suggests.
+
+## 3. Do trading days form regimes?
+
+Next, each **day** is treated as an observation, described by its vector of 30 stock returns, and clustered for $k = 2, \ldots, 9$. Two quantities are tracked: the total within-cluster sum of squares $W$ and the between-cluster sum of squares $B$.
+
+```{r}
+#| label: day-clusters
+K <- 2:9
+set.seed(2025)
+fits <- lapply(K, function(k) kmeans(R, centers = k, nstart = 25, iter.max = 50))
+WB <- data.frame(k = K,
+                 W = sapply(fits, `[[`, "tot.withinss"),
+                 B = sapply(fits, `[[`, "betweenss"))
+WB$W_drop_pct <- c(NA, round(-100 * diff(WB$W) / head(WB$W, -1), 1))
+WB$sizes <- sapply(fits, function(f) paste(sort(f$size, decreasing = TRUE), collapse = "/"))
+WB$W <- signif(WB$W, 4); WB$B <- signif(WB$B, 4)
+WB
+```
+
+```{r}
+#| label: fig-wb
+#| fig-cap: "Within-cluster (W) and between-cluster (B) sums of squares against the number of day-clusters k. W + B equals the (constant) total sum of squares."
+#| fig-width: 7
+#| fig-height: 4.5
+matplot(WB$k, cbind(WB$W, WB$B), type = "b", pch = c(19, 17), lty = 1,
+        col = c("black", "firebrick"), xlab = "k", ylab = "Sum of squares",
+        main = "W and B versus number of day-clusters")
+legend("right", c("W (within)", "B (between)"), pch = c(19, 17), col = c("black", "firebrick"), bty = "n")
+```
+
+$W$ falls and $B$ rises as $k$ grows, as they must, since $W + B$ is fixed (@fig-wb). There is no clear elbow: each extra cluster removes only a modest share of $W$ (the `W_drop_pct` column), and the gains shrink steadily.
+
+The cluster *contents* explain why. With $k = 2$ the days split almost evenly into **market-up and market-down days**, with average returns across stocks of `r sprintf("%+.2f%%", 100 * sort(rowMeans(fits[[1]]$centers))[2])` and `r sprintf("%+.2f%%", 100 * sort(rowMeans(fits[[1]]$centers))[1])` respectively. Larger $k$ mostly slices the same market-direction axis into finer bands of move size. Only at $k \ge 8$ does k-means peel off tiny clusters of a handful of extreme days. So the days do not fall into a few well-separated regimes. They form a continuum dominated by the market factor, with a thin tail of crash or rally days. For risk work, a factor model with fat-tailed or volatility-switching errors would describe this better than discrete day-clusters.
+
+## Limitations
+
+- k-means assumes roughly spherical, equal-variance clusters and uses Euclidean distance on raw returns, so high-volatility stocks and days have more influence. Clustering on correlations, or on standardised returns, is a natural sensitivity check.
+- The 1,200-day window is a single historical period. Cluster membership (especially the technology group) may not be stable in other periods.
