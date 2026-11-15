@@ -1,0 +1,352 @@
+---
+title: "Gallstone Disease Prediction from Non-Imaging Clinical Data"
+subtitle: "Can routine blood tests and body-composition scans flag patients before ultrasound?"
+author: "Kai Marsh"
+format:
+  html:
+    output-file: report.html
+    toc: true
+    toc-depth: 2
+    number-sections: false
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    code-summary: "Show code"
+  pdf:
+    output-file: report.pdf
+    toc: true
+    number-sections: false
+    geometry: margin=2.2cm
+    pdf-engine: xelatex
+    fig-pos: "H"
+    echo: false
+execute:
+  echo: true
+  warning: false
+  message: false
+jupyter: python3
+---
+
+```{python}
+#| label: setup
+#| code-summary: "Packages and settings"
+
+import warnings
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy import stats
+from IPython.display import Markdown
+from sklearn.model_selection import (train_test_split, GridSearchCV,
+                                     RepeatedStratifiedKFold, cross_val_score)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (accuracy_score, roc_auc_score, precision_score,
+                             recall_score, f1_score, roc_curve)
+from xgboost import XGBClassifier
+
+warnings.filterwarnings("ignore")
+SEED = 42
+
+# Chart styling: recessive axes, consistent categorical colours
+BLUE, ORANGE, AQUA, RED = "#2a78d6", "#eb6834", "#1baf7a", "#e34948"
+INK, INK2, GRID = "#0b0b0b", "#52514e", "#e1e0d9"
+plt.rcParams.update({
+    "figure.dpi": 110, "savefig.dpi": 200, "font.size": 10,
+    "axes.spines.top": False, "axes.spines.right": False,
+    "axes.edgecolor": "#c3c2b7", "axes.labelcolor": INK2,
+    "xtick.color": INK2, "ytick.color": INK2,
+    "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.6,
+    "axes.titlesize": 11, "axes.titleweight": "bold", "axes.titlecolor": INK,
+})
+
+def pct(x):
+    return f"{100 * x:.1f}%"
+```
+
+```{python}
+#| label: analysis
+#| code-summary: "Full analysis pipeline (data, preprocessing, tuning, evaluation)"
+
+# ---- Data -------------------------------------------------------------------
+df = pd.read_csv("data/gallstone_data.csv")
+TARGET = "Gallstone Status"            # 1 = gallstones present
+n_patients, n_features = len(df), df.shape[1] - 1
+n_pos = int(df[TARGET].sum())
+
+y = df[TARGET]
+X = df.drop(columns=TARGET)
+
+# ---- Hold out a test set FIRST, so no preprocessing step sees it ------------
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.3, random_state=SEED, stratify=y)
+
+# Correlation filter (fitted on training data): drop one of each pair with |r| > 0.90
+corr = X_train.corr().abs()
+upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
+corr_dropped = [c for c in upper.columns if (upper[c] > 0.90).any()]
+X_train = X_train.drop(columns=corr_dropped)
+X_test = X_test.drop(columns=corr_dropped)
+
+# Outlier trimming (training rows only): a patient is removed if two or more
+# continuous measurements lie beyond 2 x IQR from the quartiles.
+binary_cols = [c for c in X_train if X_train[c].nunique() <= 2]
+cont_cols = [c for c in X_train if c not in binary_cols]
+q1, q3 = X_train[cont_cols].quantile(0.25), X_train[cont_cols].quantile(0.75)
+iqr = q3 - q1
+extreme = (X_train[cont_cols] < q1 - 2 * iqr) | (X_train[cont_cols] > q3 + 2 * iqr)
+is_outlier = extreme.sum(axis=1) >= 2
+n_outliers = int(is_outlier.sum())
+X_train, y_train = X_train[~is_outlier], y_train[~is_outlier]
+
+# ---- Models: feature selection sits INSIDE each pipeline --------------------
+K = 10
+models = {
+    "Logistic regression": (
+        Pipeline([("scale", StandardScaler()),
+                  ("select", SelectKBest(f_classif, k=K)),
+                  ("clf", LogisticRegression(max_iter=5000))]),
+        {"clf__C": [0.01, 0.1, 1, 10]}),
+    "Random forest": (
+        Pipeline([("select", SelectKBest(f_classif, k=K)),
+                  ("clf", RandomForestClassifier(random_state=SEED))]),
+        {"clf__n_estimators": [200, 500], "clf__max_depth": [3, 5, 10, None],
+         "clf__min_samples_split": [2, 5, 10]}),
+    "XGBoost": (
+        Pipeline([("select", SelectKBest(f_classif, k=K)),
+                  ("clf", XGBClassifier(eval_metric="logloss", random_state=SEED))]),
+        {"clf__learning_rate": [0.03, 0.1], "clf__n_estimators": [100, 300],
+         "clf__max_depth": [2, 3, 5]}),
+}
+
+tuned, test_rows, probs = {}, [], {}
+for name, (pipe, grid) in models.items():
+    gs = GridSearchCV(pipe, grid, cv=5, scoring="roc_auc", n_jobs=-1).fit(X_train, y_train)
+    tuned[name] = gs.best_estimator_
+    pred = gs.predict(X_test)
+    probs[name] = gs.predict_proba(X_test)[:, 1]
+    test_rows.append({
+        "Model": name,
+        "Accuracy": accuracy_score(y_test, pred),
+        "AUC": roc_auc_score(y_test, probs[name]),
+        "Precision": precision_score(y_test, pred),
+        "Recall (sensitivity)": recall_score(y_test, pred),
+        "Specificity": recall_score(y_test, pred, pos_label=0),
+        "F1": f1_score(y_test, pred),
+        "Tuned settings": ", ".join(f"{k.split('__')[1]}={v}" for k, v in gs.best_params_.items()),
+    })
+test_results = pd.DataFrame(test_rows).set_index("Model")
+
+# ---- Repeated cross-validation on the training set, for model comparison ----
+cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=10, random_state=1)
+cv_auc = {name: cross_val_score(m, X_train, y_train, cv=cv, scoring="roc_auc")
+          for name, m in tuned.items()}
+
+def corrected_ttest(a, b, test_train_ratio=1 / 4):
+    """Nadeau & Bengio (2003) corrected resampled t-test. CV folds share
+    training data, so a plain paired t-test understates the variance."""
+    d = a - b
+    k = len(d)
+    t = d.mean() / np.sqrt((1 / k + test_train_ratio) * d.var(ddof=1))
+    return d.mean(), 2 * stats.t.sf(abs(t), k - 1)
+
+names = list(tuned)
+comparisons = pd.DataFrame([
+    {"Comparison": f"{a} vs {b}", "Mean AUC difference": diff, "p-value": p}
+    for i, a in enumerate(names) for b in names[i + 1:]
+    for diff, p in [corrected_ttest(cv_auc[a], cv_auc[b])]
+]).set_index("Comparison")
+min_p = comparisons["p-value"].min()
+
+# ---- Interpretation: logistic-regression odds ratios per 1 SD --------------
+lr = tuned["Logistic regression"]
+selected = X_train.columns[lr["select"].get_support()]
+odds_ratios = pd.Series(np.exp(lr["clf"].coef_[0]), index=selected).sort_values()
+
+# Handy numbers for the text
+acc = test_results["Accuracy"]
+auc = test_results["AUC"]
+or_vitd = odds_ratios["Vitamin D"]
+or_crp = odds_ratios["C-Reactive Protein (CRP)"]
+cv_mean = {n: s.mean() for n, s in cv_auc.items()}
+```
+
+::: {.callout-note title="About this report"}
+This analysis started as a university machine-learning project (RMIT, 2025). It has been rewritten as a standalone analysis, and the modelling has been rebuilt so that every preprocessing step is fitted on training data only. All figures quoted in the text are computed directly from the code below.
+:::
+
+::: {.callout-tip title="Key findings"}
+- Routine blood tests and body-composition measurements identify gallstone patients with **`{python} pct(acc.min())`–`{python} pct(acc.max())` accuracy** on held-out patients (AUC `{python} f"{auc.min():.2f}"`–`{python} f"{auc.max():.2f}"`), without imaging.
+- **The three models perform about the same.** No difference in cross-validated AUC is statistically significant (smallest corrected p = `{python} f"{min_p:.2f}"`), so the transparent logistic regression gives up little against random forest and XGBoost.
+- **Vitamin D and C-reactive protein (CRP) carry the clearest signal.** Each standard deviation lower in vitamin D multiplies the odds of gallstones by about `{python} f"{1 / or_vitd:.1f}"`; each standard deviation higher in CRP (an inflammation marker) multiplies them by about `{python} f"{or_crp:.1f}"`.
+- **So what:** a low-cost triage score built from tests that are often already ordered could help prioritise who is sent for ultrasound. It would need validation on other hospitals' patients before clinical use.
+:::
+
+# Question
+
+Gallstone disease is usually diagnosed with ultrasound. This analysis asks whether **non-imaging clinical measurements** (demographics, bioimpedance body composition and routine laboratory tests) can flag patients likely to have gallstones. If they can, a cheap score could support triage before imaging.
+
+# Data
+
+The data are the public UCI *Gallstone* dataset: **`{python} n_patients` patients** from Ankara VM Medical Park Hospital (June 2022 – June 2023), of whom **`{python} n_pos` had gallstones**. There are **`{python} n_features` candidate predictors** in three groups:
+
+- **Demographics and history:** age, sex, height, weight, BMI, comorbidities (coronary artery disease, hypothyroidism, hyperlipidaemia, diabetes).
+- **Bioimpedance body composition:** total/extracellular/intracellular body water, fat ratios, lean and muscle mass, visceral fat, bone mass, hepatic fat.
+- **Laboratory tests:** glucose, cholesterol (total, LDL, HDL), triglycerides, liver enzymes (AST, ALT, ALP), creatinine, GFR, CRP, haemoglobin and vitamin D.
+
+There are no missing values, and the two classes are almost exactly balanced, so no resampling is needed.
+
+```{python}
+#| label: fig-eda
+#| fig-cap: "Vitamin D and CRP by gallstone status (all patients). Gallstone patients tend to have lower vitamin D and higher CRP; CRP is shown on a log scale because it is heavily right-skewed (values of 0 are plotted at 0.1)."
+#| fig-height: 3.2
+#| code-summary: "Exploratory plot"
+
+fig, axes = plt.subplots(1, 2, figsize=(8, 3.2))
+groups = [("No gallstones", 0, BLUE), ("Gallstones", 1, ORANGE)]
+for ax, col, title, log in [(axes[0], "Vitamin D", "Vitamin D", False),
+                            (axes[1], "C-Reactive Protein (CRP)", "CRP (log scale)", True)]:
+    data = [df.loc[df[TARGET] == g, col] + (0.1 if log else 0) for _, g, _ in groups]
+    bp = ax.boxplot(data, widths=0.5, patch_artist=True, showfliers=True,
+                    medianprops={"color": INK, "linewidth": 1.5},
+                    flierprops={"marker": "o", "markersize": 3, "alpha": 0.5})
+    for patch, (_, _, c) in zip(bp["boxes"], groups):
+        patch.set_facecolor(c); patch.set_alpha(0.75); patch.set_edgecolor(c)
+    ax.set_xticks([1, 2], [g[0] for g in groups])
+    ax.set_title(title, loc="left")
+    ax.grid(axis="x", visible=False)
+    if log:
+        ax.set_yscale("log")
+fig.tight_layout()
+plt.show()
+```
+
+# Method
+
+The design keeps the test patients completely unseen until the final evaluation, so the reported test scores are an honest estimate of performance on new patients.
+
+1. **Hold-out split.** 30% of patients (`{python} len(X_test)`) were set aside as a stratified test set before any other step.
+2. **Redundancy filter.** Using the training data, one feature from each pair correlated above 0.90 was dropped: `{python} ", ".join(corr_dropped)`. Many body-composition measures are near-duplicates of each other.
+3. **Outlier trimming.** `{python} n_outliers` training patients with two or more continuous measurements beyond 2 × IQR were removed, which leaves `{python} len(X_train)` for training. Test patients were never trimmed.
+4. **Feature selection.** The `{python} K` features with the largest ANOVA F-scores were kept. This step sits *inside* each model pipeline, so it is re-fitted within every cross-validation fold and never sees validation data.
+5. **Models.** Three models span a range from interpretable to flexible: **logistic regression** (standardised inputs, L2 penalty), **random forest** and **XGBoost**. Each was tuned with 5-fold `GridSearchCV`, maximising AUC.
+6. **Comparison.** The tuned models were compared with 10× repeated 5-fold cross-validation on the training set. They were tested with the Nadeau–Bengio corrected t-test, because a plain paired t-test on overlapping folds is too eager to declare differences significant.
+
+# Results
+
+## Test-set performance
+
+```{python}
+#| label: tbl-test
+#| tbl-cap: "Performance on the held-out test patients. Precision, recall and F1 refer to the gallstone-positive class."
+#| code-summary: "Results table"
+
+show = test_results.drop(columns="Tuned settings")
+Markdown(show.to_markdown(floatfmt=".3f"))
+```
+
+All three models land within a few percentage points of each other on the `{python} len(X_test)` test patients. With a test set this small, one patient is worth about `{python} pct(1 / len(X_test))` of accuracy, so the gaps in the table are within the noise. The ROC curves overlap across most of their range (@fig-roc).
+
+```{python}
+#| label: fig-roc
+#| fig-cap: "ROC curves on the held-out test set."
+#| fig-height: 4
+#| code-summary: "ROC plot"
+
+fig, ax = plt.subplots(figsize=(5, 4.2))
+ax.plot([0, 1], [0, 1], color="#c3c2b7", linewidth=1, linestyle="--")
+for (name, p), colour in zip(probs.items(), [BLUE, ORANGE, AQUA]):
+    fpr, tpr, _ = roc_curve(y_test, p)
+    ax.plot(fpr, tpr, color=colour, linewidth=2, label=f"{name} (AUC {auc[name]:.2f})")
+ax.set_xlabel("False positive rate (1 − specificity)")
+ax.set_ylabel("True positive rate (sensitivity)")
+ax.set_xlim(0, 1); ax.set_ylim(0, 1.01)
+ax.legend(loc="lower right", frameon=False)
+fig.tight_layout()
+plt.show()
+```
+
+## Are the differences real?
+
+```{python}
+#| label: tbl-cv
+#| tbl-cap: "Repeated cross-validation (10 × 5-fold) on the training set: mean AUC per model."
+#| code-summary: "Cross-validation results"
+
+cv_table = pd.DataFrame({"Mean CV AUC": cv_mean,
+                         "SD across folds": {n: s.std() for n, s in cv_auc.items()}})
+Markdown(cv_table.to_markdown(floatfmt=".3f"))
+```
+
+```{python}
+#| label: tbl-cmp
+#| tbl-cap: "Paired model comparisons on the same folds (Nadeau–Bengio corrected t-test)."
+#| code-summary: "Corrected paired comparisons"
+
+Markdown(comparisons.to_markdown(floatfmt=("", "+.3f", ".2f")))
+```
+
+Cross-validated AUCs range from `{python} f"{min(cv_mean.values()):.3f}"` to `{python} f"{max(cv_mean.values()):.3f}"`, and the fold-to-fold standard deviation (about 0.07–0.08) is well over double the largest gap between models. None of the corrected comparisons is significant at the 5% level. **The data do not support choosing one model on accuracy grounds.** That favours logistic regression, because its coefficients can be read and checked by clinicians.
+
+## What drives the prediction?
+
+```{python}
+#| label: fig-odds
+#| fig-cap: "Logistic regression: change in the odds of gallstones for a one-standard-deviation increase in each selected feature (log scale). Values below 1 mean lower risk; values above 1 mean higher risk. Features were selected by ANOVA F-score on the training set."
+#| fig-height: 4
+#| code-summary: "Odds-ratio plot (also saved as the key chart)"
+
+labels = [s.replace("Aspartat Aminotransferaz", "Aspartate aminotransferase")
+           .replace("Extracellular Fluid/Total Body Water", "Extracellular fluid / total body water")
+          for s in odds_ratios.index]
+colours = [BLUE if v < 1 else RED for v in odds_ratios]
+fig, ax = plt.subplots(figsize=(7.5, 4.2))
+ypos = np.arange(len(odds_ratios))
+ax.hlines(ypos, 1, odds_ratios.values, color=colours, linewidth=2)
+ax.scatter(odds_ratios.values, ypos, color=colours, s=50, zorder=3,
+           edgecolor="white", linewidth=1.5)
+ax.axvline(1, color="#c3c2b7", linewidth=1)
+ax.set_xscale("log")
+ticks = [0.25, 0.5, 1, 2, 4]
+ax.set_xticks(ticks, [f"{t:g}×" for t in ticks])
+ax.xaxis.set_minor_locator(plt.NullLocator())   # hide log-scale minor ticks/labels
+ax.set_xlim(0.3, 4.5)
+ax.set_yticks(ypos, labels)
+ax.grid(axis="y", visible=False)
+for yv, v in zip(ypos, odds_ratios.values):
+    ax.annotate(f"{v:.2f}", (v, yv), xytext=(8 if v >= 1 else -8, 0),
+                textcoords="offset points", va="center",
+                ha="left" if v >= 1 else "right", fontsize=8.5, color=INK2)
+ax.set_xlabel("Odds ratio per 1 SD increase")
+ax.set_title("Lower vitamin D and higher CRP go with gallstones", loc="left")
+fig.tight_layout()
+fig.savefig("figures/key_chart.png", bbox_inches="tight", facecolor="white")
+plt.show()
+```
+
+- **Vitamin D** has the largest ANOVA F-score of any feature and a strong inverse association (odds ratio `{python} f"{or_vitd:.2f}"` per SD). This is consistent with published links between vitamin D deficiency and gallstone formation.
+- **CRP** is the strongest risk-raising feature (odds ratio `{python} f"{or_crp:.2f}"` per SD). This fits inflammation that accompanies gallbladder disease, so it may be partly a *consequence* rather than a cause.
+- Several body-composition measures also enter the model. Because they are correlated with each other, their individual coefficients should be read with caution: the overall predictions are stable, but the split of credit between near-duplicate features is not.
+
+# Limitations
+
+- **One hospital, `{python} n_patients` patients.** Performance on other populations is unknown and needs external validation. The test set is small, so test accuracy is uncertain to within several percentage points.
+- **Associations, not causes.** Markers such as CRP may rise *because of* gallbladder disease, which would help detection but say nothing about prevention.
+- **Model comparison uses the tuning data.** The repeated cross-validation reuses the training set the hyperparameters were tuned on, so absolute CV scores are slightly optimistic. The comparison *between* models is fair, because all three are treated the same way.
+- **Few comorbid patients.** Only a small share of patients had any recorded comorbidity, which limits what can be said about their role.
+
+# Conclusions
+
+Non-imaging clinical data predict gallstone disease with roughly `{python} f"{100 * acc.mean():.0f}%"` accuracy on unseen patients. A simple logistic regression does as well as tree ensembles, within the precision this sample allows. Vitamin D and CRP are the most informative routine tests. The result supports building a transparent triage score, with external validation on data from other hospitals as the essential next step.
+
+# References
+
+- Esen, I. et al. *Gallstone* dataset. UCI Machine Learning Repository. <https://archive.ics.uci.edu/dataset/1150/gallstone-1> (CC BY 4.0).
+- Nadeau, C., & Bengio, Y. (2003). Inference for the generalization error. *Machine Learning, 52*(3), 239–281.
+- Pedregosa, F. et al. (2011). Scikit-learn: Machine learning in Python. *Journal of Machine Learning Research, 12*, 2825–2830.
+- Chen, T., & Guestrin, C. (2016). XGBoost: A scalable tree boosting system. *Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining*, 785–794.
+- Virtanen, P. et al. (2020). SciPy 1.0: Fundamental algorithms for scientific computing in Python. *Nature Methods, 17*(3), 261–272.
+- Hunter, J. D. (2007). Matplotlib: A 2D graphics environment. *Computing in Science & Engineering, 9*(3), 90–95.

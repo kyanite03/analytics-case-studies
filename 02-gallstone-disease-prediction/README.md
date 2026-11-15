@@ -1,25 +1,25 @@
-# Routine blood tests predict gallstone disease with 81% accuracy, no imaging needed
+# Routine blood tests and body scans flag gallstone disease with ~79% accuracy, no imaging needed
 
 **Executive summary**
 - Question: can non-imaging clinical measurements flag patients likely to have gallstones before ultrasound?
-- Finding: logistic regression on 10 selected features reaches 81% test accuracy and an AUC of 0.856. Vitamin D and CRP are the strongest predictors.
-- So what: a cheap triage score built from tests that are already collected could prioritise who gets imaged first.
+- Finding: on held-out patients, all three models reach 78–79% accuracy (AUC 0.85–0.89), and none is significantly better. Low vitamin D and high CRP carry the clearest signal.
+- So what: a cheap, transparent triage score built from tests that are often already ordered could prioritise who gets imaged first.
 
-![ANOVA F-scores of the top 10 features](figures/key_chart.png)
+![Logistic-regression odds ratios per standard deviation for the ten selected features](figures/key_chart.png)
 
-**Approach**: 319 patients with 38 demographic, bioimpedance and laboratory features (UCI). Highly correlated features were removed, multicollinearity checked with VIF, and outliers trimmed; ANOVA F-tests then selected the 10 most separating features. Logistic regression, random forest and XGBoost were tuned with `GridSearchCV` and compared on a stratified hold-out set, with 5-fold cross-validation and paired t-tests. These three cover a range from interpretable-linear to flexible-nonlinear.
+**Approach**: 319 patients with 38 demographic, bioimpedance and laboratory features (UCI). A 30% test set is held out before any preprocessing. The correlation filter and outlier trimming are fitted on training data only, and ANOVA feature selection runs inside each model pipeline. Logistic regression, random forest and XGBoost are each tuned with `GridSearchCV`, then compared with 10× repeated 5-fold cross-validation and a Nadeau–Bengio corrected paired t-test.
 
 **Key findings**
-- All three models reach about 81% test accuracy
-- Logistic regression has the highest AUC (0.856) and precision for positive cases (0.87); the tree models have higher recall (0.78 vs 0.70)
-- Most differences between models aren't statistically significant, so the simpler, interpretable model is preferred
-- Lower vitamin D and higher CRP are associated with gallstone presence
+- Test accuracy: logistic regression 78.1%, random forest 79.2%, XGBoost 79.2% (AUC 0.848 / 0.885 / 0.868)
+- No pairwise difference in cross-validated AUC is significant (all p ≥ 0.26), so the interpretable logistic model gives up little
+- Each SD lower in vitamin D roughly doubles the odds of gallstones (OR 0.49 per SD increase); each SD higher in CRP multiplies them by 3.2
+- With 96 test patients, one patient is worth ~1 percentage point of accuracy, so the gaps between models are within the noise
 
 **Limitations**
 - A single hospital and 319 patients; external validation is needed
-- Only about 40 patients had comorbidities, which limits analysis of their role
-- Correlation filtering and outlier removal were applied before the train/test split, which could slightly inflate the hold-out estimate
+- Associations, not causes: CRP may rise *because of* gallbladder disease
+- Correlated body-composition features make individual coefficients less stable than the model's overall predictions
 
-**Full report**: [PDF](report.pdf) · [Read online](https://kyanite03.github.io/analytics-case-studies/02-gallstone-disease-prediction/report.html) · [notebook](analysis.ipynb)
-**Tools**: Python · pandas · scikit-learn · XGBoost · statsmodels · seaborn
-**Reproduce**: `pip install pandas scikit-learn xgboost statsmodels seaborn openpyxl`, then run `analysis.ipynb` (data in `data/`, see [data note](data/README.md))
+**Full report**: [PDF](report.pdf) · [Read online](https://kyanite03.github.io/analytics-case-studies/02-gallstone-disease-prediction/report.html) · [source](analysis.qmd)
+**Tools**: Python · pandas · scikit-learn · XGBoost · SciPy · matplotlib · Quarto
+**Reproduce**: `pip install pandas scikit-learn xgboost scipy matplotlib tabulate jupyter`, then `quarto render analysis.qmd` (data in `data/`, see [data note](data/README.md))
