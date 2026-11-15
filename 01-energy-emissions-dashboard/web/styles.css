@@ -21,7 +21,20 @@ p.subtitle { color: #555; margin-top: 0; }
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 0.6rem;
 }
+.ctrl-grid input { width: 100%; }
+.controls select { max-width: 100%; min-width: 260px; }
 .ctrl-actions { display: flex; gap: 0.8rem; align-items: center; }
+.ctrl-actions button {
+  background: #2c7be5;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.45rem 1.1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ctrl-actions button:hover { background: #1a68d1; }
 .ok   { color: #0b5e2a; font-weight: 600; }
 .warn { color: #a02020; font-weight: 600; }
 .two-col {
@@ -31,6 +44,15 @@ p.subtitle { color: #555; margin-top: 0; }
 }
 .map-wrap { width: 100%; }
 .map-caption { margin-top: 0.4rem; color: #333; font-size: 0.95rem; }
+.density-legend { display: flex; flex-direction: column; gap: 0.25rem; margin: 0.6rem 0 1rem; max-width: 360px; font-size: 0.85rem; }
+.density-legend .dl-title { color: #444; }
+.density-legend .dl-bar {
+  height: 10px;
+  border-radius: 5px;
+  border: 1px solid #cfd8cf;
+  background: linear-gradient(90deg, #a8d688 0%, #60b054 25%, #28843a 55%, #084614 100%);
+}
+.density-legend .dl-ends { display: flex; justify-content: space-between; color: #555; }
 .status-card { border-radius: 10px; padding: 0.8rem 1.1rem; margin: 0.8rem 0; }
 .status-card.pass { background: #e8f5ec; border: 1px solid #2c8a4a; }
 .status-card.fail { background: #fdeaea; border: 1px solid #c0392b; }

@@ -12,7 +12,15 @@ format:
 ---
 
 ```{ojs}
-import {Plot} from "./plot.js";
+//| output: false
+import {areaY, barX, barY, geo, image, rect, text, plot} from "./plot.js";
+```
+
+```{ojs}
+//| output: false
+// Quarto OJS can't parse `import * as`, so rebuild the namespace by hand.
+// Any new Plot mark used below must be added to the import above.
+Plot = ({areaY, barX, barY, geo, image, rect, text, plot});
 ```
 
 ```{ojs}
@@ -101,6 +109,7 @@ mutable lastApplied = (() => ({Coal: 5, Gas: 35, Wind: 205, "Solar (incl. Roofto
 ```
 
 ```{ojs}
+//| output: false
 {
   submit;
   const els = [viewof coal, viewof gas, viewof wind, viewof solar, viewof other, viewof hydro];
@@ -124,6 +133,7 @@ viewof rescale = Inputs.button("Rescale to target", {value: 0, reduce: (x) => x 
 ```
 
 ```{ojs}
+//| output: false
 {
   rescale;
   const els = [viewof coal, viewof gas, viewof wind, viewof solar, viewof other, viewof hydro];
@@ -205,19 +215,25 @@ timesTas = plantingHa / tasHa;
 
 ```{ojs}
 mapMarks = [
-  Plot.geo(states, {fill: "#f3ead7", stroke: "#8a7f66", strokeOpacity: 0.7}),
-  forestBounds ? Plot.image([{
-    src: forestUrl,
-    x: (forestBounds.xmin + forestBounds.xmax) / 2,
-    y: (forestBounds.ymin + forestBounds.ymax) / 2,
-    w: forestBounds.xmax - forestBounds.xmin,
-    h: forestBounds.ymax - forestBounds.ymin
-  }], {x: "x", y: "y", width: "w", height: "h", opacity: 0.85}) : null,
-  Plot.rect([{x1: -2250000, y1: -5050000, x2: -2250000 + forestSideM, y2: -5050000 + forestSideM}], {stroke: "#555", strokeWidth: 2, fill: "none"}),
-  Plot.rect([{x1: -1050000, y1: -4700000, x2: -1050000 + plantingSideM, y2: -4700000 + plantingSideM}], {fill: "#1b7a2b", fillOpacity: 0.55, stroke: "#0f4d1c", strokeWidth: 1.5}),
-  Plot.text([{x: -1672000, y: -4990000, t: "All existing forest"}], {x: "x", y: "y", text: "t", fontSize: 14, fill: "#333"}),
-  Plot.text([{x: -1050000, y: -4640000, t: "New planting"}], {x: "x", y: "y", text: "t", fontSize: 14, fill: "#0f4d1c"})
+  Plot.geo(states, {fill: "#f3ead7", stroke: "#6b6350", strokeOpacity: 0.85}),
+  Plot.rect([{x1: -2250000, y1: -5000000, x2: -2250000 + forestSideM, y2: -5000000 + forestSideM}], {x1: "x1", x2: "x2", y1: "y1", y2: "y2", stroke: "#555", strokeWidth: 2.5, fill: "none"}),
+  Plot.rect([{x1: -1050000, y1: -4650000, x2: -1050000 + plantingSideM, y2: -4650000 + plantingSideM}], {x1: "x1", x2: "x2", y1: "y1", y2: "y2", fill: "#1b7a2b", fillOpacity: 0.7, stroke: "#0f4d1c", strokeWidth: 1.5}),
+  Plot.text([{x: -1672000, y: -4915000, t: "All existing forest"}], {x: "x", y: "y", text: "t", fontSize: 14, fill: "#333"}),
+  Plot.text([{x: -1050000, y: -4585000, t: "New planting"}], {x: "x", y: "y", text: "t", fontSize: 14, fill: "#0f4d1c"})
 ].filter(Boolean);
+```
+
+```{ojs}
+// The image mark's width/height channels are pixel units (unscaled), so convert
+// the forest extent from EPSG:3577 metres to pixels using this chart's frame.
+// The frame is kept equal-aspect (see mapChart) so x and y pixels share a scale.
+forestImage = (width, height) => forestBounds ? Plot.image([{
+  src: forestUrl,
+  x: (forestBounds.xmin + forestBounds.xmax) / 2,
+  y: (forestBounds.ymin + forestBounds.ymax) / 2,
+  w: (forestBounds.xmax - forestBounds.xmin) * (width - 8) / 5000000,
+  h: (forestBounds.ymax - forestBounds.ymin) * (width - 8) / 5000000
+}], {x: "x", y: "y", width: "w", height: "h", src: "src", opacity: 0.9}) : null;
 ```
 
 ```{ojs}
@@ -226,57 +242,64 @@ mapCaptionNote = html`New planting needed: <b>${(plantingHa / 1e6).toFixed(1)} M
 
 ```{ojs}
 function genChart(width) {
-  return Plot.plot({
+  return {
     width,
     height: 380,
     marginLeft: 64,
     marginBottom: 40,
     y: {label: "TWh", grid: true},
-    x: {domain: [1990, 2050], ticks: [1990, 2000, 2010, 2020, 2030, 2040, 2050]},
+    x: {label: null, domain: [1990, 2050], ticks: [1990, 2000, 2010, 2020, 2030, 2040, 2050], tickFormat: "d"},
     color: {domain: typeOrder, range: typeOrder.map(t => palette[t]), legend: true},
     marks: [Plot.areaY(genPath, {x: "year", y: "twh", fill: "Type", order: typeOrder, curve: "linear"})]
-  });
+  };
 }
 ```
 
 ```{ojs}
 function stackChart(width) {
-  return Plot.plot({
+  return {
     width,
     height: 320,
     marginLeft: 64,
     y: {label: "Mt CO2-e", grid: true},
-    x: {type: "band", label: null},
+    x: {type: "band", label: null, tickFormat: "d"},
     color: {domain: ["Electricity", "Non-electricity"], range: ["#d64545", "#7d8590"], legend: true},
     marks: [Plot.barY(stackData, {x: "year", y: "mt", fill: "source", order: ["Non-electricity", "Electricity"]})]
-  });
+  };
 }
 ```
 
 ```{ojs}
 function parisChart(width) {
-  return Plot.plot({
+  return {
     width,
     height: 200,
     marginLeft: 110,
     x: {label: "Mt CO2-e", grid: true, domain: [0, 700]},
     y: {label: null},
     marks: [Plot.barX(paris, {y: "label", x: "mt", fill: d => d.mt === 0 ? "#0b4d1c" : d.mt < 400 ? "#0b4d1c" : "#333"}), Plot.text(paris, {y: "label", x: "mt", text: d => d.mt === 0 ? "ZERO" : `${d.mt} Mt`, dx: 10, textAnchor: "start"})]
-  });
+  };
 }
 ```
 
 ```{ojs}
 function mapChart(width) {
-  return Plot.plot({
+  // Equal-aspect frame: data extent is 5,000,000 x 4,550,000 m, so the pixel
+  // scale is the same on both axes and km squares stay true squares.
+  const height = (width - 8) * 4550000 / 5000000 + 8;
+  return {
     width,
-    height: 560,
+    height,
     margin: 4,
     x: {domain: [-2300000, 2700000], axis: null},
     y: {domain: [-5350000, -800000], axis: null},
     aspectRatio: false,
-    marks: mapMarks
-  });
+    marks: [
+      Plot.rect([{x1: -2300000, y1: -5350000, x2: 2700000, y2: -800000}], {x1: "x1", x2: "x2", y1: "y1", y2: "y2", fill: "#eef4fa", stroke: "none"}),
+      forestImage(width, height),
+      ...mapMarks
+    ]
+  };
 }
 ```
 
@@ -296,7 +319,7 @@ html`<div class="controls">
 ## The path to 2050
 
 ```{ojs}
-Plot.plot(genChart(width))
+width > 0 ? Plot.plot(genChart(width)) : null
 ```
 
 ## Offset map
@@ -304,11 +327,19 @@ Plot.plot(genChart(width))
 ::: {.map-wrap}
 
 ```{ojs}
-Plot.plot(mapChart(width))
+width > 0 ? Plot.plot(mapChart(width)) : null
 ```
 
 ```{ojs}
 html`<div class="map-caption">${mapCaptionNote}</div>`
+```
+
+```{ojs}
+html`<div class="density-legend">
+  <span class="dl-title">Forest density (share of each 2.5 km cell)</span>
+  <div class="dl-bar"></div>
+  <div class="dl-ends"><span>Sparse</span><span>Dense</span></div>
+</div>`
 ```
 
 :::
@@ -318,11 +349,11 @@ html`<div class="map-caption">${mapCaptionNote}</div>`
 ::: {.two-col}
 
 ```{ojs}
-Plot.plot(stackChart(width / 2 - 20))
+width > 60 ? Plot.plot(stackChart(width / 2 - 20)) : null
 ```
 
 ```{ojs}
-Plot.plot(parisChart(width / 2 - 20))
+width > 60 ? Plot.plot(parisChart(width / 2 - 20)) : null
 ```
 
 :::
@@ -350,7 +381,7 @@ html`
   <li><b>Paris targets.</b> 2005 baseline 613.42 Mt (DCCEEW 2024); 2030 target −43% vs 2005 = 349.65 Mt (Climate Change Act 2022); 2050 net zero.</li>
   <li><b>Offset ceiling.</b> Illustrative, adjustable: how much residual CO2-e could realistically be offset each year (default 100 Mt/yr).</li>
   <li><b>Sequestration.</b> Adjustable, default 10 t CO2/ha/yr; real rates vary strongly with rainfall and management.</li>
-  <li><b>Forest map.</b> ABARES Forests of Australia 2023 (CC BY 4.0): 133.6 Mha of forest, aggregated to 5 km cells; state outlines from ozmaps (ABS). Tasmania = 6.84 Mha.</li>
+  <li><b>Forest map.</b> ABARES Forests of Australia 2023 (CC BY 4.0): 133.6 Mha of forest, aggregated to 2.5 km cells and shaded from pale to deep green by the share of each cell that is forested; state outlines from ozmaps (ABS). Tasmania = 6.84 Mha.</li>
   <li><b>This is a simplified model</b> for exploring trade-offs, not a forecast.</li>
 </ul>`
 ```

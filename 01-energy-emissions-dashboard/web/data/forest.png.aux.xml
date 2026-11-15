@@ -1,6 +1,6 @@
 <PAMDataset>
   <SRS dataAxisToSRSAxisMapping="1,2">PROJCS["unnamed",GEOGCS["GDA94",DATUM["Geocentric_Datum_of_Australia_1994",SPHEROID["GRS 1980",6378137,298.257222101]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4283"]],PROJECTION["Albers_Conic_Equal_Area"],PARAMETER["latitude_of_center",0],PARAMETER["longitude_of_center",132],PARAMETER["standard_parallel_1",-18],PARAMETER["standard_parallel_2",-36],PARAMETER["false_easting",0],PARAMETER["false_northing",0],UNIT["METERS",1],AXIS["Easting",EAST],AXIS["Northing",NORTH]]</SRS>
-  <GeoTransform> -1.8880000000000000e+06,  5.0000000000000000e+03,  0.0000000000000000e+00, -1.0100000000000000e+06,  0.0000000000000000e+00, -5.0000000000000000e+03</GeoTransform>
+  <GeoTransform> -1.8880000000000000e+06,  2.5000000000000000e+03,  0.0000000000000000e+00, -1.0100000000000000e+06,  0.0000000000000000e+00, -2.5000000000000000e+03</GeoTransform>
   <Metadata domain="IMAGE_STRUCTURE">
     <MDI key="INTERLEAVE">PIXEL</MDI>
   </Metadata>
@@ -8,9 +8,9 @@
     <Description>aus_for23</Description>
     <NoDataValue>2.55000000000000E+02</NoDataValue>
     <Metadata>
-      <MDI key="STATISTICS_MAXIMUM">34</MDI>
+      <MDI key="STATISTICS_MAXIMUM">168</MDI>
       <MDI key="STATISTICS_MEAN">-9999</MDI>
-      <MDI key="STATISTICS_MINIMUM">34</MDI>
+      <MDI key="STATISTICS_MINIMUM">12</MDI>
       <MDI key="STATISTICS_STDDEV">-9999</MDI>
     </Metadata>
   </PAMRasterBand>
@@ -18,9 +18,9 @@
     <Description>aus_for23</Description>
     <NoDataValue>2.55000000000000E+02</NoDataValue>
     <Metadata>
-      <MDI key="STATISTICS_MAXIMUM">139</MDI>
+      <MDI key="STATISTICS_MAXIMUM">216</MDI>
       <MDI key="STATISTICS_MEAN">-9999</MDI>
-      <MDI key="STATISTICS_MINIMUM">139</MDI>
+      <MDI key="STATISTICS_MINIMUM">72</MDI>
       <MDI key="STATISTICS_STDDEV">-9999</MDI>
     </Metadata>
   </PAMRasterBand>
@@ -28,9 +28,9 @@
     <Description>aus_for23</Description>
     <NoDataValue>2.55000000000000E+02</NoDataValue>
     <Metadata>
-      <MDI key="STATISTICS_MAXIMUM">34</MDI>
+      <MDI key="STATISTICS_MAXIMUM">132</MDI>
       <MDI key="STATISTICS_MEAN">-9999</MDI>
-      <MDI key="STATISTICS_MINIMUM">34</MDI>
+      <MDI key="STATISTICS_MINIMUM">24</MDI>
       <MDI key="STATISTICS_STDDEV">-9999</MDI>
     </Metadata>
   </PAMRasterBand>
@@ -38,7 +38,7 @@
     <Description>aus_for23</Description>
     <NoDataValue>2.55000000000000E+02</NoDataValue>
     <Metadata>
-      <MDI key="STATISTICS_MAXIMUM">254</MDI>
+      <MDI key="STATISTICS_MAXIMUM">0</MDI>
       <MDI key="STATISTICS_MEAN">-9999</MDI>
       <MDI key="STATISTICS_MINIMUM">0</MDI>
       <MDI key="STATISTICS_STDDEV">-9999</MDI>

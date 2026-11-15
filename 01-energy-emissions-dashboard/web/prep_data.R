@@ -73,7 +73,7 @@ st_write(states, "data/states.geojson", driver = "GeoJSON", quiet = TRUE)
 
 # ------------------------------------------------------------- forest layer ----
 # ABARES Forests of Australia 2023, 100 m grid EPSG:3577.
-# FOREST=1 cells -> aggregate to 5 km fraction -> single-band PNG overlay.
+# FOREST=1 cells -> aggregate to 2.5 km fraction -> density-ramp RGBA PNG overlay.
 raster_dir <- "/home/kai_m/shiny/energy_app/aus_for23"          # grid folder
 vat_dbf     <- "../../_handoff/abares/aus_for23.tif.vat.dbf"
 
@@ -83,16 +83,31 @@ if (requireNamespace("terra", quietly = TRUE) && dir.exists(raster_dir) && file.
   vat <- read.dbf(vat_dbf, as.is = TRUE)
   cls <- cbind(vat$VALUE, vat$FOREST)               # 1 = forest, 0 = not
   r <- classify(r, cls)
-  frac <- aggregate(r, fact = 50, fun = "mean", na.rm = TRUE)  # 100 m -> 5 km
+  frac <- aggregate(r, fact = 25, fun = "mean", na.rm = TRUE)  # 100 m -> 2.5 km
   ext <- ext(frac)
   forest_bounds <- list(xmin = ext[1], ymin = ext[3], xmax = ext[2], ymax = ext[4])
-  # RGBA overlay: constant forest-green, alpha = fraction forested
+  # Ocean / no-data cells get fraction 0 (transparent) -- do NOT leave them NA,
+  # because writeRaster's NAflag would write them as 255 (opaque).
+  frac[is.na(frac)] <- 0
   frac <- clamp(frac, 0, 1)
   mk <- function(v) { l <- frac; values(l) <- v; l }
-  a <- clamp(frac * 255, 0, 255)
-  rgba <- c(mk(34), mk(139), mk(34), a)
+  # Density ramp: fraction forested -> green shade (sparse light green, dense deep green).
+  stops <- data.frame(
+    t = c(0.02, 0.25, 0.55, 1.0),
+    r = c(168,  96,  40,   8),
+    g = c(214, 176, 132,  70),
+    b = c(136,  84,  58,  20)
+  )
+  ramp <- function(f, band) {
+    val <- approx(stops$t, stops[[band]], xout = f, rule = 2)$y
+    round(val / 12) * 12          # quantise to 16 levels -> smaller PNG, same look
+  }
+  v <- values(frac)
+  rgba <- c(mk(ramp(v, "r")), mk(ramp(v, "g")), mk(ramp(v, "b")),
+            clamp((frac > 0.01) * 255, 0, 255))
   writeRaster(rgba, "data/forest.png", datatype = "INT1U",
-              overwrite = TRUE, NAflag = 255, gdal = c("COMPRESS=DEFLATE"))
+              overwrite = TRUE, NAflag = 255,
+              gdal = c("COMPRESS=DEFLATE", "PREDICTOR=2", "ZLEVEL=9"))
   cat("forest.png written; bounds:", unlist(forest_bounds), "\n")
 } else {
   cat("SKIPPING forest layer (raster dir or dbf not available; needs access to", raster_dir, ")\n")
