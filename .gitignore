@@ -1,0 +1,23 @@
+.Rhistory
+.RData
+.Rproj.user/
+.DS_Store
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+_freeze/
+*_cache/
+*_files/
+.quarto/
+renv/library/
+renv/staging/
+data/raw/
+*:Zone.Identifier
+*.csv
+!data/sample*.csv
+# Small, redistributable processed extract (CC BY, AIMS), see data/README.md
+!03-coral-trout-reef-monitoring/data/aims_coral_trout_sites_2012.csv
+# Course-supplied or third-party data without clear redistribution rights (kept locally only)
+03-coral-trout-reef-monitoring/data/*.txt
+06-bayesian-inference-methods/data/*.txt
+01-energy-emissions-dashboard/data/*.xlsx
