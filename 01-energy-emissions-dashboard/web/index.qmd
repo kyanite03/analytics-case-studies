@@ -1,5 +1,5 @@
 ---
-title: "Make Australia Green Again!"
+title: "Australia's Net Zero Electricity Pathways"
 subtitle: "Choose your electricity path to net zero by 2050"
 author: "Kai Marsh"
 execute:

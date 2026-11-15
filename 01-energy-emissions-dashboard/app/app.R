@@ -95,7 +95,7 @@ div(class = "main-container",
   style = "display: flex; flex-direction: column; height: 1080px;",
 
   div(style = "flex: 0 0 80px; padding: 10px; display: flex; justify-content: space-between; align-items: center;",
-  h4("Make Australia Green Again! (Choose your electricity path to net zero by 2050)"),
+  h4("Australia's Net Zero Electricity Pathways: choose your electricity path to net zero by 2050"),
 
   div(style = "text-align: right;",
     tags$div("by Kai Marsh", style = "font-size: 16px; font-weight: bold;"),

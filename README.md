@@ -1,6 +1,6 @@
 # Analytics Case Studies
 
-Applied statistics and data analysis by Kai Marsh, BCom (Finance & Statistics) and Diploma of Mathematical Sciences (Statistics), University of Melbourne. Each folder is a self-contained analysis with a one-page summary (its README) and a full report (PDF/HTML).
+Applied statistics and data analysis by Kai Marsh, BCom (Finance & Statistics), University of Melbourne. Each folder is a self-contained analysis with a one-page summary (its README) and a full report (PDF/HTML).
 
 | # | Case study | Question | Methods | Output |
 |---|-----------|----------|---------|--------|

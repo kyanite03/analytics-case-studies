@@ -3,7 +3,7 @@ project:
   output-dir: ../site
 
 website:
-  title: "Make Australia Green Again!"
+  title: "Australia's Net Zero Electricity Pathways"
   page-navigation: false
 
 format:
