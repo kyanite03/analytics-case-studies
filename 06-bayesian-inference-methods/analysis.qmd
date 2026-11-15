@@ -1,0 +1,748 @@
+---
+title: "Bayesian Inference: Conjugacy, MCMC and Variational Inference"
+subtitle: "Gibbs sampling, Metropolis–Hastings and CAVI implemented from scratch in base R"
+author: "Kai Marsh"
+format:
+  html:
+    output-file: report.html
+    toc: true
+    toc-depth: 2
+    number-sections: false
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    code-summary: "Show code"
+  pdf:
+    output-file: report.pdf
+    toc: true
+    number-sections: false
+    geometry: margin=2.2cm
+    pdf-engine: xelatex
+    fig-pos: "H"
+    echo: false
+execute:
+  echo: true
+---
+
+::: {.callout-note title="About this report"}
+This report compares three ways of computing a posterior distribution: exact conjugate analysis, Markov chain Monte Carlo (Gibbs sampling and random-walk Metropolis–Hastings), and mean-field variational inference fitted with coordinate-ascent (CAVI). All samplers, diagnostics (effective sample size and Gelman–Rubin $\hat R$) and the CAVI algorithm are written in base R, and every method is checked against the exact posterior. The work was originally done as coursework for a university statistics course (University of Melbourne, 2026). The data are simulated.
+:::
+
+::: {.callout-tip title="Key findings"}
+- **Exact, MCMC and variational answers agree:** Gibbs (μ₁ = 2.713, μ₂ = −3.144) and Metropolis–Hastings (2.721, −3.148) posterior means differ by only a few Monte Carlo standard errors, and CAVI converges to the same means from every starting point.
+- **Gibbs sampling is the efficient choice here.** Because the posterior correlation is near zero (−0.011), Gibbs converges almost immediately. Random-walk MH (acceptance about 0.44) needs a burn-in and is more autocorrelated.
+- **Mean-field VI understates uncertainty:** its variances (1/103, 1/303) are slightly below the exact marginal variances. The gap is negligible here but would grow with a strongly correlated posterior.
+- The conjugate analysis gives a Gamma(52, 2427.4) posterior for the precision, i.e. a score standard deviation of about 6.8, and a Student-t posterior predictive, derived analytically and confirmed by simulation.
+:::
+
+# Part 1: Conjugate posterior and posterior predictive
+
+**Setting.** We have 100 simulated exam scores, assumed independent with $x_i \sim \text{N}(75, 1/\tau)$, where the precision $\tau$ is unknown and has a $\text{Gamma}(2, 1)$ prior (shape–rate, $f(x) = \frac{\beta^{\alpha}}{\Gamma(\alpha)} x^{\alpha-1} e^{-\beta x}$). The goals are (a) to derive and evaluate the posterior $p(\tau \mid x_{1:100})$, and (b) to show that the posterior predictive distribution of a new score is a three-parameter $t(\nu, a, b)$ distribution (Jackman, 2009), with density
+$$
+p(x \mid \nu, a, b) = \frac{\Gamma\left(\frac{\nu + 1}{2}\right)}{\Gamma\left(\frac{\nu}{2}\right)\sqrt{\pi \nu b}} \left(1 + \frac{1}{\nu}\frac{(x - a)^2}{b}\right)^{-\frac{\nu + 1}{2}},
+$$
+and to evaluate its parameters.
+
+```{r}
+#| label: load-data-1
+
+X <- scan(file = "data/exam_scores.txt", what = double())
+length(X)
+mean(X)
+```
+
+# Part 2: Two normal means: Gibbs, Metropolis–Hastings and VI
+
+**Setting.** Observations $x_1,\ldots,x_{100} \sim \text{N}(\mu_1, 1)$ and $y_1,\ldots,y_{150} \sim \text{N}(\mu_2, 1/2)$ are independent, with a correlated bivariate normal prior
+$$
+\begin{pmatrix} \mu_1 \\ \mu_2 \end{pmatrix} \sim N\left(\begin{pmatrix} 0 \\ 0 \end{pmatrix}, \begin{pmatrix} 3/5 & -2/5 \\ -2/5 & 3/5 \end{pmatrix}\right).
+$$
+The posterior $p(\mu_1,\mu_2 \mid x, y)$ is approximated three ways:
+
+- **Gibbs sampling** (parts a–c): derive the full conditionals, run two chains from $(0,0)$ and $(2,-1)$, and summarise the marginal posteriors with posterior means and 90% equal-tailed credible intervals.
+- **Random-walk Metropolis–Hastings** (parts d–e): independent $\text{N}(\cdot, 0.1^2)$ proposals for each coordinate, two chains, the same summaries.
+- **Mean-field VI** (parts f–h): $q(\mu_1,\mu_2)=q_1(\mu_1)q_2(\mu_2)$, deriving the optimal factors and the ELBO, then running CAVI from several starting points until the ELBO changes by less than $10^{-5}$.
+
+```{r}
+#| label: load-data-2
+
+x <- scan(file = "data/x_obs.txt", what = double())
+y <- scan(file = "data/y_obs.txt", what = double())
+c(n_x = length(x), n_y = length(y), mean_x = mean(x), mean_y = mean(y))
+```
+
+# Analysis
+
+
+```{r}
+#| label: setup
+# Helper for reporting numbers in the text, so the prose always matches the R output
+f <- function(v, d = 3) formatC(v, format = "f", digits = d)
+```
+
+## Part 1 analysis
+
+### Part (a): Posterior distribution of the precision
+
+By Bayes' theorem, $p(\tau \mid x_{1:n}) \propto p(x_{1:n} \mid \tau)\,p(\tau)$, where $n = 100$. Since the scores are independent with $x_i \sim \text{N}(75, 1/\tau)$, the likelihood is
+
+$$
+p(x_{1:n} \mid \tau)
+= \prod_{i=1}^{n} \sqrt{\frac{\tau}{2\pi}} \exp\left\{-\frac{\tau}{2}(x_i - 75)^2\right\}
+\propto \tau^{n/2} \exp\left\{-\frac{\tau}{2}\sum_{i=1}^{n}(x_i - 75)^2\right\}.
+$$
+
+The $\text{Gamma}(2, 1)$ prior gives $p(\tau) \propto \tau^{2-1} e^{-\tau}$. Therefore
+
+$$
+\begin{aligned}
+p(\tau \mid x_{1:n})
+&\propto \tau^{n/2} \exp\left\{-\frac{\tau}{2}\sum_{i=1}^{n}(x_i - 75)^2\right\} \cdot \tau^{2-1} e^{-\tau} \\
+&= \tau^{\left(2 + \frac{n}{2}\right) - 1} \exp\left\{-\tau\left(1 + \frac{1}{2}\sum_{i=1}^{n}(x_i - 75)^2\right)\right\}.
+\end{aligned}
+$$
+
+As a function of $\tau$, this is the kernel of a Gamma density in the rate parameterisation defined above. Since a density is determined by its kernel up to the normalising constant, the posterior must be that Gamma distribution. This is the standard conjugacy of the Gamma prior for the precision of a Normal with known mean. Hence
+
+$$
+\tau \mid x_{1:n} \sim \text{Gamma}(\alpha_n, \beta_n), \qquad
+\alpha_n = 2 + \frac{n}{2}, \qquad
+\beta_n = 1 + \frac{1}{2}\sum_{i=1}^{n}(x_i - 75)^2 .
+$$
+
+The known mean is $75$, so the sum of squares is taken about $75$, not about $\bar{x}$.
+
+```{r}
+#| label: p1a-posterior
+n1      <- length(X)
+S       <- sum((X - 75)^2)
+alpha_n <- 2 + n1 / 2
+beta_n  <- 1 + S / 2
+data.frame(n = n1, sum_sq_about_75 = S, alpha_n = alpha_n, beta_n = beta_n,
+           post_mean_tau = alpha_n / beta_n)
+```
+
+Using the data, $\sum_{i}(x_i - 75)^2 = `r f(S, 2)`$, so
+
+$$
+\tau \mid x_1, \ldots, x_{100} \sim \text{Gamma}\left(`r alpha_n`,\ `r f(beta_n, 3)`\right).
+$$
+
+The posterior mean of the precision is $E[\tau \mid x_{1:n}] = \alpha_n / \beta_n = `r f(alpha_n / beta_n, 4)`$. This corresponds to a standard deviation of about $1/\sqrt{`r f(alpha_n / beta_n, 4)`} \approx `r f(1 / sqrt(alpha_n / beta_n), 2)`$ marks, which is a plausible spread for exam scores. The prior has little influence: it adds only $2$ to the shape and $1$ to the rate, against $n/2 = 50$ and $S/2 = `r f(S / 2, 1)`$ from the data.
+
+### Part (b): Posterior predictive distribution
+
+By the law of total probability, $\tau$ is integrated out. Given $\tau$, the new score $\tilde{x}$ is conditionally independent of $x_{1:n}$, so $p(\tilde{x} \mid \tau, x_{1:n}) = p(\tilde{x} \mid \tau)$, and $\tau$ is integrated out against its posterior from Part (a):
+
+$$
+\begin{aligned}
+p(\tilde{x} \mid x_{1:n})
+&= \int_0^\infty p(\tilde{x} \mid \tau)\, p(\tau \mid x_{1:n})\, d\tau \\
+&= \int_0^\infty \sqrt{\frac{\tau}{2\pi}}\, e^{-\frac{\tau}{2}(\tilde{x}-75)^2}
+   \cdot \frac{\beta_n^{\alpha_n}}{\Gamma(\alpha_n)}\, \tau^{\alpha_n - 1} e^{-\beta_n \tau}\, d\tau \\
+&= \frac{\beta_n^{\alpha_n}}{\Gamma(\alpha_n)\sqrt{2\pi}}
+   \int_0^\infty \tau^{\left(\alpha_n + \frac{1}{2}\right) - 1}
+   \exp\left\{-\tau\left(\beta_n + \frac{(\tilde{x}-75)^2}{2}\right)\right\} d\tau .
+\end{aligned}
+$$
+
+The integrand is an unnormalised Gamma density. Using the Gamma integral identity $\int_0^\infty \tau^{a-1}e^{-b\tau}\,d\tau = \Gamma(a)/b^{a}$ (valid for $a, b > 0$, and following from the fact that the $\text{Gamma}(a, b)$ pdf integrates to 1) with $a = \alpha_n + \frac12$ and $b = \beta_n + \frac{(\tilde{x}-75)^2}{2}$,
+
+$$
+\begin{aligned}
+p(\tilde{x} \mid x_{1:n})
+&= \frac{\beta_n^{\alpha_n}}{\Gamma(\alpha_n)\sqrt{2\pi}} \cdot
+   \frac{\Gamma\left(\alpha_n + \frac{1}{2}\right)}
+        {\left(\beta_n + \frac{(\tilde{x}-75)^2}{2}\right)^{\alpha_n + \frac{1}{2}}} \\
+&= \frac{\beta_n^{\alpha_n}\,\Gamma\left(\alpha_n + \frac{1}{2}\right)}{\Gamma(\alpha_n)\sqrt{2\pi}\;\beta_n^{\alpha_n + \frac12}}
+   \left(1 + \frac{(\tilde{x}-75)^2}{2\beta_n}\right)^{-\left(\alpha_n + \frac{1}{2}\right)} \\
+&= \frac{\Gamma\left(\alpha_n + \frac{1}{2}\right)}{\Gamma(\alpha_n)\sqrt{2\pi\beta_n}}
+   \left(1 + \frac{(\tilde{x}-75)^2}{2\beta_n}\right)^{-\left(\alpha_n + \frac{1}{2}\right)} .
+\end{aligned}
+$$
+
+This density is compared term by term with the $t(\nu, a, b)$ pdf, setting $\nu = 2\alpha_n$, $a = 75$ and $b = \beta_n / \alpha_n$:
+
+- **Exponent:** $\dfrac{\nu + 1}{2} = \alpha_n + \dfrac12$.
+- **Kernel:** $\dfrac{1}{\nu}\dfrac{(\tilde{x} - a)^2}{b} = \dfrac{(\tilde{x} - 75)^2}{2\alpha_n \cdot \beta_n/\alpha_n} = \dfrac{(\tilde{x} - 75)^2}{2\beta_n}$.
+- **Normalising constant:** $\dfrac{\Gamma\left(\frac{\nu+1}{2}\right)}{\Gamma\left(\frac{\nu}{2}\right)\sqrt{\pi\nu b}} = \dfrac{\Gamma\left(\alpha_n + \frac12\right)}{\Gamma(\alpha_n)\sqrt{\pi \cdot 2\alpha_n \cdot \beta_n/\alpha_n}} = \dfrac{\Gamma\left(\alpha_n + \frac12\right)}{\Gamma(\alpha_n)\sqrt{2\pi\beta_n}}$.
+
+All three components agree, so the posterior predictive density is exactly the $t(\nu, a, b)$ density:
+
+$$
+\tilde{x} \mid x_{1:n} \sim t\left(\nu = 2\alpha_n,\ a = 75,\ b = \frac{\beta_n}{\alpha_n}\right).
+$$
+
+```{r}
+#| label: p1b-predictive
+nu <- 2 * alpha_n
+a  <- 75
+b  <- beta_n / alpha_n
+data.frame(nu = nu, a = a, b = b, scale_sqrt_b = sqrt(b),
+           predictive_sd = sqrt(b * nu / (nu - 2)))
+```
+
+Using the data, the posterior predictive distribution is $t\left(\nu = `r nu`,\ a = 75,\ b = `r f(b, 3)`\right)$.
+
+The predictive distribution is centred at the known mean $75$ with scale $\sqrt{b} = `r f(sqrt(b), 2)`$. If $T \sim t_\nu$ (standard $t$), then $\text{Var}(T) = \nu/(\nu - 2)$ for $\nu > 2$, and $\tilde{x} = a + \sqrt{b}\,T$ (shown below), so $\text{Var}(\tilde{x} \mid x_{1:n}) = b\,\nu/(\nu - 2)$. Its standard deviation, $\sqrt{b\,\nu/(\nu - 2)} = `r f(sqrt(b * nu / (nu - 2)), 2)`$, is slightly larger than the plug-in value $1/\sqrt{E[\tau \mid x_{1:n}]} = `r f(1 / sqrt(alpha_n / beta_n), 2)`$, because it also reflects posterior uncertainty about $\tau$. With $\nu = `r nu`$ degrees of freedom, the predictive distribution is very close to a Normal.
+
+As a numerical check of the derivation, the predictive distribution is simulated by composition: draw $\tau$ from its Gamma posterior, then draw $\tilde{x} \sim \text{N}(75, 1/\tau)$. R's `dt()` is the standard $t_\nu$ density, $p_\nu(t) = \frac{\Gamma\left(\frac{\nu+1}{2}\right)}{\Gamma\left(\frac{\nu}{2}\right)\sqrt{\pi\nu}}\left(1 + \frac{t^2}{\nu}\right)^{-\frac{\nu+1}{2}}$. By the change-of-variables formula, if $T \sim t_\nu$ and $X = a + \sqrt{b}\,T$, then $p_X(x) = \frac{1}{\sqrt{b}}\,p_\nu\left(\frac{x - a}{\sqrt{b}}\right)$. Substituting gives exactly the $t(\nu, a, b)$ pdf defined above. So the density of $t(\nu, a, b)$ is $\frac{1}{\sqrt{b}}\,\texttt{dt}\left(\frac{x - a}{\sqrt{b}}, \nu\right)$. The call to `rgamma()` uses `rate`, which matches the Gamma parameterisation defined above. @fig-p1-predictive shows that the derived density matches the simulated draws.
+
+```{r}
+#| label: fig-p1-predictive
+#| fig-cap: "Posterior predictive check: histogram of 100,000 composition draws ($\\tau$ from its Gamma posterior, then a new score given $\\tau$) with the derived $t(104, 75, 46.68)$ density overlaid in red."
+set.seed(30027)
+tau_draw <- rgamma(1e5, shape = alpha_n, rate = beta_n)
+x_new    <- rnorm(1e5, mean = 75, sd = 1 / sqrt(tau_draw))
+dt3 <- function(x, nu, a, b) dt((x - a) / sqrt(b), df = nu) / sqrt(b)
+hist(x_new, breaks = 80, freq = FALSE, main = "",
+     xlab = "New exam score", ylab = "Density",
+     col = "grey85", border = "white")
+curve(dt3(x, nu, a, b), add = TRUE, lwd = 2, col = "red")
+```
+
+## Part 2 analysis
+
+### Part (a): Conditional distributions
+
+Throughout, $n = 100$ and $m = 150$.
+
+**Prior precision.** $\det\boldsymbol\Sigma = \frac{9}{25} - \frac{4}{25} = \frac15$, so
+
+$$
+\boldsymbol\Sigma^{-1} = 5\begin{pmatrix} \frac35 & \frac25 \\ \frac25 & \frac35 \end{pmatrix}
+= \begin{pmatrix} 3 & 2 \\ 2 & 3 \end{pmatrix},
+\qquad
+\boldsymbol\mu^\top\boldsymbol\Sigma^{-1}\boldsymbol\mu = 3\mu_1^2 + 4\mu_1\mu_2 + 3\mu_2^2 .
+$$
+
+**Log joint density.** The bivariate normal prior density is proportional to $\exp\left\{-\frac12 \boldsymbol\mu^\top \boldsymbol\Sigma^{-1} \boldsymbol\mu\right\}$, since the prior mean is $\mathbf{0}$. Each $x_i$ contributes $-\frac12 (x_i - \mu_1)^2$ to the log density. Each $y_j$ has variance $\frac12$, so it contributes $-\frac{(y_j - \mu_2)^2}{2 \cdot \frac12} = -(y_j - \mu_2)^2$. Dropping constants,
+
+$$
+\log p(\mu_1, \mu_2, \mathbf x, \mathbf y)
+= -\frac12\sum_{i=1}^{n}(x_i - \mu_1)^2 - \sum_{j=1}^{m}(y_j - \mu_2)^2
+  - \frac12\left(3\mu_1^2 + 4\mu_1\mu_2 + 3\mu_2^2\right) + \text{const}.
+$$
+
+**Conditional for $\mu_1$.** The full conditional is proportional to the joint, $p(\mu_1 \mid \mu_2, \mathbf x, \mathbf y) \propto p(\mu_1, \mu_2, \mathbf x, \mathbf y)$, so keep only the terms that involve $\mu_1$ and complete the square, using $A\mu^2 - 2B\mu = A\left(\mu - \frac{B}{A}\right)^2 - \frac{B^2}{A}$:
+
+$$
+\begin{aligned}
+\log p(\mu_1 \mid \mu_2, \mathbf x, \mathbf y)
+&= -\frac12\left(n\mu_1^2 - 2\mu_1\sum_i x_i\right) - \frac12\left(3\mu_1^2 + 4\mu_1\mu_2\right) + \text{const}\\
+&= -\frac12\left[(n + 3)\mu_1^2 - 2\mu_1\left(\sum_i x_i - 2\mu_2\right)\right] + \text{const}\\
+&= -\frac{n + 3}{2}\left(\mu_1 - \frac{\sum_i x_i - 2\mu_2}{n + 3}\right)^2 + \text{const}.
+\end{aligned}
+$$
+
+This is the log of a Normal kernel, $-\frac{1}{2\sigma^2}(\mu_1 - \text{mean})^2$, with precision $1/\sigma^2 = n + 3 = 103$. So
+
+$$
+\mu_1 \mid \mu_2, \mathbf x, \mathbf y \sim \text{N}\left(\text{mean} = \frac{\sum_{i=1}^{100} x_i - 2\mu_2}{103},\ \text{variance} = \frac{1}{103}\right).
+$$
+
+**Conditional for $\mu_2$.** Similarly, keeping only the terms in $\mu_2$:
+
+$$
+\begin{aligned}
+\log p(\mu_2 \mid \mu_1, \mathbf x, \mathbf y)
+&= -\left(m\mu_2^2 - 2\mu_2\sum_j y_j\right) - \frac12\left(3\mu_2^2 + 4\mu_1\mu_2\right) + \text{const}\\
+&= -\frac12\left[(2m + 3)\mu_2^2 - 2\mu_2\left(2\sum_j y_j - 2\mu_1\right)\right] + \text{const}\\
+&= -\frac{2m + 3}{2}\left(\mu_2 - \frac{2\sum_j y_j - 2\mu_1}{2m + 3}\right)^2 + \text{const}.
+\end{aligned}
+$$
+
+Hence
+
+$$
+\mu_2 \mid \mu_1, \mathbf x, \mathbf y \sim \text{N}\left(\text{mean} = \frac{2\sum_{j=1}^{150} y_j - 2\mu_1}{303},\ \text{variance} = \frac{1}{303}\right).
+$$
+
+In each conditional, the precision is the data precision ($100 \times 1 = 100$ for $\mu_1$ and $150 \times 2 = 300$ for $\mu_2$) plus the diagonal prior precision $3$. The prior correlation enters only through the term $-2\mu_{\text{other}}$ in the mean.
+
+```{r}
+#| label: p2-setup
+n  <- length(x); m <- length(y)
+Sx <- sum(x);    Sy <- sum(y)
+Sigma     <- matrix(c(3/5, -2/5, -2/5, 3/5), nrow = 2)
+Sigma_inv <- solve(Sigma)
+Sigma_inv   # confirms the hand-derived inverse
+c(sum_x = Sx, sum_y = Sy)
+```
+
+Using the data, $\sum_i x_i = `r f(Sx)`$ and $\sum_j y_j = `r f(Sy)`$. The conditional means are therefore $(`r f(Sx)` - 2\mu_2)/103$ and $(`r f(2 * Sy)` - 2\mu_1)/303$.
+
+### Part (b): Gibbs sampling implementation
+
+Each Gibbs iteration draws $\mu_1$ from its full conditional given the current $\mu_2$, then draws $\mu_2$ given the new $\mu_1$, using the distributions derived in Part (a). Each chain is run for 1000 iterations.
+
+```{r}
+#| label: p2b-gibbs
+gibbs <- function(init, n_iter = 1000) {
+  out <- matrix(NA_real_, n_iter + 1, 2, dimnames = list(NULL, c("mu1", "mu2")))
+  out[1, ] <- init                       # row 1 stores the initial values
+  mu2 <- init[2]
+  for (t in 2:(n_iter + 1)) {
+    mu1 <- rnorm(1, mean = (Sx - 2 * mu2) / (n + 3),
+                    sd   = sqrt(1 / (n + 3)))
+    mu2 <- rnorm(1, mean = (2 * Sy - 2 * mu1) / (2 * m + 3),
+                    sd   = sqrt(1 / (2 * m + 3)))
+    out[t, ] <- c(mu1, mu2)
+  }
+  out
+}
+
+set.seed(30027)
+g1 <- gibbs(init = c(0, 0))
+g2 <- gibbs(init = c(2, -1))
+rbind(chain1_first_draws = g1[2, ], chain2_first_draws = g2[2, ])
+```
+
+```{r}
+#| label: p2-trace-fn
+# Overlaid trace plots of two chains, one panel per parameter
+trace_plot <- function(c1, c2, main) {
+  op <- par(mfrow = c(2, 1), mar = c(4, 4.5, 2, 1))
+  labs <- c(expression(mu[1]), expression(mu[2]))
+  for (k in 1:2) {
+    yr <- range(c1[, k], c2[, k])
+    matplot(0:(nrow(c1) - 1), cbind(c1[, k], c2[, k]), type = "l", lty = 1,
+            col = c("black", "red"), xlab = "Iteration", ylab = labs[[k]],
+            main = if (k == 1) main else "",
+            ylim = c(yr[1], yr[2] + 0.35 * diff(yr)))   # headroom for legend
+    legend("topright", c("Chain 1: (0, 0)", "Chain 2: (2, -1)"),
+           col = c("black", "red"), lty = 1, bty = "n", horiz = TRUE, cex = 0.8)
+  }
+  par(op)
+}
+```
+
+```{r}
+#| label: fig-gibbs-trace
+#| fig-cap: "Gibbs sampling trace plots for $\\mu_1$ (top) and $\\mu_2$ (bottom): two chains of 1000 iterations started from (0, 0) (black) and (2, -1) (red). Iteration 0 is the initial value."
+#| fig-height: 6
+trace_plot(g1, g2, "Gibbs sampler")
+```
+
+```{r}
+#| label: fig-gibbs-trace-zoom
+#| fig-cap: "The first 20 Gibbs iterations of both chains, showing that the chains reach the high-posterior region at the first update."
+#| fig-height: 6
+trace_plot(g1[1:21, ], g2[1:21, ], "Gibbs sampler: first 20 iterations")
+```
+
+**Mixing.** In @fig-gibbs-trace, the two chains overlap completely and fluctuate around the same values, about $2.71$ for $\mu_1$ and $-3.15$ for $\mu_2$. There is no trend, drift or stickiness. The chains therefore mix well and behave similarly, which indicates convergence to the same stationary distribution regardless of the starting point.
+
+@fig-gibbs-trace-zoom shows why convergence is so fast. Both chains move to the high-density region at the first update. Each conditional mean depends only weakly on the other parameter: the coefficients are $-2/103$ and $-2/303$. Starting $\mu_2$ at $-1$ instead of near $-3.15$ therefore shifts the first draw of $\mu_1$ by only about $0.04$. The posterior correlation between $\mu_1$ and $\mu_2$ is close to zero (confirmed in the comparison with the exact posterior in Part (h)), and Gibbs sampling is very efficient in that situation.
+
+### Part (c): Posterior summaries from Gibbs sampling
+
+```{r}
+#| label: p2-summary-fn
+# Posterior mean and 90% equal-tailed credible interval for each parameter
+post_summary <- function(draws) {
+  t(apply(draws, 2, function(s)
+    c(mean = mean(s), quantile(s, c(0.05, 0.95)))))
+}
+
+# Histogram + kernel density estimate of each marginal posterior
+post_plot <- function(draws, method) {
+  op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+  labs <- c(expression(mu[1]), expression(mu[2]))
+  for (k in 1:2) {
+    s <- draws[, k]
+    hist(s, breaks = 30, freq = FALSE,
+         main = paste(method, "-", colnames(draws)[k]),
+         xlab = labs[[k]], ylab = "Density", col = "grey85", border = "white")
+    lines(density(s), lwd = 2)
+    abline(v = mean(s), col = "red", lwd = 2)
+    abline(v = quantile(s, c(0.05, 0.95)), col = "blue", lty = 2, lwd = 2)
+  }
+  par(op)
+}
+
+# Convergence / efficiency diagnostics, written in base R
+# Effective sample size: n / (1 + 2 * sum of autocorrelations), summing
+# lags until the first non-positive autocorrelation (initial positive sequence)
+ess <- function(s) {
+  rho <- acf(s, lag.max = length(s) - 1, plot = FALSE)$acf[-1]
+  k <- which(rho <= 0)[1]
+  if (is.na(k)) k <- length(rho) + 1
+  length(s) / (1 + 2 * sum(rho[seq_len(k - 1)]))
+}
+# Gelman-Rubin potential scale reduction factor for two chains of equal length
+rhat <- function(c1, c2) {
+  L <- length(c1)
+  W <- (var(c1) + var(c2)) / 2                 # within-chain variance
+  B <- L * var(c(mean(c1), mean(c2)))          # between-chain variance
+  sqrt(((L - 1) / L * W + B / L) / W)
+}
+diagnostics <- function(keep1, keep2) {
+  t(sapply(1:2, function(k) {
+    e <- ess(keep1[, k])
+    c(ESS = e, MCSE_mean = sd(keep1[, k]) / sqrt(e),
+      Rhat = rhat(keep1[, k], keep2[, k]))
+  })) |> `rownames<-`(c("mu1", "mu2"))
+}
+```
+
+**Burn-in.** @fig-gibbs-trace-zoom shows that after the first update both chains already fluctuate within the same band as the rest of the run, with no trend thereafter. Chain 2's first draw of $\mu_1$ is `r f(g2[2, 1])`, already within one posterior standard deviation (about 0.1) of the long-run mean. The first 50 iterations are discarded as burn-in, which is many times longer than the transient visible in the plot, as a safety margin. That leaves 950 draws from chain 1 (initial values $(0, 0)$) for the summaries. The diagnostics below support this choice: the Gelman-Rubin $\hat{R}$, computed from both chains after burn-in, is close to 1 for both parameters. That means the between-chain variability is negligible relative to the within-chain variability, which is the quantitative counterpart of the chains "mixing well". The Monte Carlo standard error (MCSE) of each posterior mean, $\text{sd}/\sqrt{\text{ESS}}$, is small relative to the posterior standard deviation.
+
+```{r}
+#| label: p2c-gibbs-summary
+burn_gibbs <- 50
+gibbs_keep <- g1[-(1:(burn_gibbs + 1)), ]   # drop the initial value + burn-in
+gibbs_sum  <- post_summary(gibbs_keep)
+round(gibbs_sum, 4)
+gibbs_diag <- diagnostics(gibbs_keep, g2[-(1:(burn_gibbs + 1)), ])
+round(gibbs_diag, 4)
+```
+
+```{r}
+#| label: fig-gibbs-post
+#| fig-cap: "Estimated marginal posterior distributions of $\\mu_1$ (left) and $\\mu_2$ (right) from Gibbs chain 1 after a burn-in of 50 iterations. Grey: histogram; black: kernel density estimate; red: posterior mean; blue dashed: 90% equal-tailed credible interval."
+#| fig-height: 3.5
+post_plot(gibbs_keep, "Gibbs")
+```
+
+@fig-gibbs-post shows the estimated marginal posterior distributions. Both are unimodal and symmetric, as expected, since the exact posterior is Normal (confirmed in the comparison with the exact posterior in Part (h)).
+
+| Parameter | Posterior mean | 90% credible interval |
+|:---|:---:|:---:|
+| $\mu_1$ | `r f(gibbs_sum[1, 1])` | (`r f(gibbs_sum[1, 2])`, `r f(gibbs_sum[1, 3])`) |
+| $\mu_2$ | `r f(gibbs_sum[2, 1])` | (`r f(gibbs_sum[2, 2])`, `r f(gibbs_sum[2, 3])`) |
+
+: Gibbs sampling estimates (chain 1, after burn-in). Each credible interval leaves 5% in each tail.
+
+The interval for $\mu_2$ is narrower than for $\mu_1$. This is because the $y$ data carry more information: there are 150 observations, each with precision 2, compared with 100 observations of precision 1 for $x$.
+
+### Part (d): MH implementation
+
+The proposal is a random walk: $\mu_1^n \sim \text{N}(\mu_1^c, 0.1^2)$ and $\mu_2^n \sim \text{N}(\mu_2^c, 0.1^2)$, independently. This proposal is symmetric, $q(\boldsymbol\mu^n \mid \boldsymbol\mu^c) = q(\boldsymbol\mu^c \mid \boldsymbol\mu^n)$, so the proposal densities cancel in the MH ratio, and the acceptance probability is
+
+$$
+\alpha(\boldsymbol\mu^c, \boldsymbol\mu^n)
+= \min\left\{1,\ \frac{p(\mu_1^n, \mu_2^n \mid \mathbf x, \mathbf y)}{p(\mu_1^c, \mu_2^c \mid \mathbf x, \mathbf y)}\right\}
+= \min\left\{1,\ \exp\left[\log \tilde p(\boldsymbol\mu^n) - \log \tilde p(\boldsymbol\mu^c)\right]\right\},
+$$
+
+where
+
+$$
+\tilde p(\boldsymbol\mu) = \prod_{i=1}^{100} \text{N}(x_i; \mu_1, 1)\prod_{j=1}^{150}\text{N}\left(y_j; \mu_2, \tfrac12\right)\exp\left\{-\tfrac12 \boldsymbol\mu^\top\boldsymbol\Sigma^{-1}\boldsymbol\mu\right\}
+$$
+
+is the unnormalised posterior. The unknown normalising constant cancels in the ratio. The computation is done on the log scale to avoid numerical underflow of the likelihood, and a proposal is accepted if $\log U < \log\tilde p(\boldsymbol\mu^n) - \log\tilde p(\boldsymbol\mu^c)$ with $U \sim \text{Unif}(0, 1)$. Each chain is run for 5000 iterations.
+
+```{r}
+#| label: p2d-mh
+log_post <- function(mu) {
+  sum(dnorm(x, mean = mu[1], sd = 1, log = TRUE)) +
+  sum(dnorm(y, mean = mu[2], sd = 1 / sqrt(2), log = TRUE)) -
+  0.5 * drop(t(mu) %*% Sigma_inv %*% mu)          # log prior, up to a constant
+}
+
+mh <- function(init, n_iter = 5000, step = 0.1) {
+  out <- matrix(NA_real_, n_iter + 1, 2, dimnames = list(NULL, c("mu1", "mu2")))
+  out[1, ] <- init
+  cur <- init; lp_cur <- log_post(cur); n_acc <- 0
+  for (t in 2:(n_iter + 1)) {
+    prop    <- rnorm(2, mean = cur, sd = step)    # N(current, 0.1^2) for each
+    lp_prop <- log_post(prop)
+    if (log(runif(1)) < lp_prop - lp_cur) {        # accept w.p. min(1, ratio)
+      cur <- prop; lp_cur <- lp_prop; n_acc <- n_acc + 1
+    }
+    out[t, ] <- cur
+  }
+  attr(out, "acc_rate") <- n_acc / n_iter
+  out
+}
+
+set.seed(30027)
+m1 <- mh(init = c(0, 0))
+m2 <- mh(init = c(2, -1))
+acc <- c(chain1 = attr(m1, "acc_rate"), chain2 = attr(m2, "acc_rate"))
+acc
+
+# First iteration at which a chain comes within 0.1 of the mean of its own
+# second half (a data-driven reference point, not a hard-coded answer)
+reach <- function(ch) {
+  centre <- colMeans(ch[(nrow(ch) %/% 2):nrow(ch), ])
+  which(abs(ch[, 1] - centre[1]) < 0.1 & abs(ch[, 2] - centre[2]) < 0.1)[1] - 1
+}
+c(chain1 = reach(m1), chain2 = reach(m2))
+```
+
+```{r}
+#| label: fig-mh-trace
+#| fig-cap: "Metropolis-Hastings trace plots for $\\mu_1$ (top) and $\\mu_2$ (bottom): two chains of 5000 iterations started from (0, 0) (black) and (2, -1) (red), random-walk proposal with standard deviation 0.1."
+#| fig-height: 6
+trace_plot(m1, m2, "Metropolis-Hastings")
+```
+
+```{r}
+#| label: fig-mh-trace-zoom
+#| fig-cap: "The first 300 MH iterations of both chains, showing the transient phase before the chains reach the high-posterior region."
+#| fig-height: 6
+trace_plot(m1[1:301, ], m2[1:301, ], "Metropolis-Hastings: first 300 iterations")
+```
+
+**Mixing.** The acceptance rates are `r f(acc[1], 3)` and `r f(acc[2], 3)`. These are within the range of roughly 0.2 to 0.5 usually regarded as efficient for a low-dimensional random-walk sampler. A step size that is too small gives acceptance near 1 but very slow movement. A step size that is too large gives acceptance near 0 and a chain that rarely moves. Here the proposal standard deviation, 0.1, is comparable to the posterior standard deviations (about 0.1 and 0.06), which explains the moderate acceptance rate.
+
+Unlike Gibbs sampling, MH has a visible transient phase, shown in @fig-mh-trace-zoom. Each proposal moves each coordinate by only about $0.1$, so the chains walk gradually from their starting points towards the posterior mode. Chain 1 first comes within $0.1$ (in both coordinates) of the mean of its own second half at iteration `r reach(m1)`, and chain 2 at iteration `r reach(m2)`. After this phase, @fig-mh-trace shows the two chains overlapping and fluctuating around the same values, about $2.71$ for $\mu_1$ and $-3.15$ for $\mu_2$, with no trends. The chains therefore mix well and behave similarly. They are more autocorrelated than the Gibbs chains, because the chain stays at its current value whenever a proposal is rejected, and moves are small when they are accepted. @fig-acf quantifies this in Part (e).
+
+### Part (e): Posterior summaries from MH
+
+**Burn-in.** From @fig-mh-trace-zoom, both chains stop trending and reach the stationary region within about `r max(reach(m1), reach(m2))` iterations, and @fig-mh-trace shows that they stay there for the rest of the run. The first 500 iterations are discarded as burn-in, roughly four times the visible transient, as a safety margin. That leaves 4500 draws from chain 1 (initial values $(0, 0)$). As for Gibbs, the Gelman-Rubin $\hat{R}$ from both chains after burn-in, the effective sample size and the MCSE of each posterior mean are reported.
+
+```{r}
+#| label: p2e-mh-summary
+burn_mh  <- 500
+mh_keep  <- m1[-(1:(burn_mh + 1)), ]
+mh_sum   <- post_summary(mh_keep)
+round(mh_sum, 4)
+mh_diag  <- diagnostics(mh_keep, m2[-(1:(burn_mh + 1)), ])
+round(mh_diag, 4)
+```
+
+```{r}
+#| label: fig-acf
+#| fig-cap: "Sample autocorrelation functions of the post-burn-in draws from chain 1: Gibbs (top) and MH (bottom), for $\\mu_1$ (left) and $\\mu_2$ (right). Dashed lines: approximate 95% bounds for zero autocorrelation."
+#| fig-height: 5
+op <- par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+acf(gibbs_keep[, 1], main = "Gibbs: mu1", xlab = "Lag", ylab = "Autocorrelation")
+acf(gibbs_keep[, 2], main = "Gibbs: mu2", xlab = "Lag", ylab = "Autocorrelation")
+acf(mh_keep[, 1],    main = "MH: mu1",    xlab = "Lag", ylab = "Autocorrelation")
+acf(mh_keep[, 2],    main = "MH: mu2",    xlab = "Lag", ylab = "Autocorrelation")
+par(op)
+```
+
+@fig-acf supports the mixing comments in Parts (b) and (d). The Gibbs draws are essentially uncorrelated after lag 0. The MH autocorrelations decay to near zero only after `r f(min(which(acf(mh_keep[, 1], plot = FALSE)$acf <= 0.05)) - 1, 0)` lags or so for $\mu_1$. Consequently, the `r nrow(mh_keep)` MH draws are worth only about `r f(mh_diag[1, "ESS"], 0)` ($\mu_1$) and `r f(mh_diag[2, "ESS"], 0)` ($\mu_2$) independent draws, compared with about `r f(gibbs_diag[1, "ESS"], 0)` and `r f(gibbs_diag[2, "ESS"], 0)` for the `r nrow(gibbs_keep)` Gibbs draws. For both samplers, $\hat{R}$ is at most `r f(max(gibbs_diag[, "Rhat"], mh_diag[, "Rhat"]))`, consistent with convergence.
+
+```{r}
+#| label: fig-mh-post
+#| fig-cap: "Estimated marginal posterior distributions of $\\mu_1$ (left) and $\\mu_2$ (right) from MH chain 1 after a burn-in of 500 iterations. Grey: histogram; black: kernel density estimate; red: posterior mean; blue dashed: 90% equal-tailed credible interval."
+#| fig-height: 3.5
+post_plot(mh_keep, "MH")
+```
+
+| Parameter | Posterior mean | 90% credible interval |
+|:---|:---:|:---:|
+| $\mu_1$ | `r f(mh_sum[1, 1])` | (`r f(mh_sum[1, 2])`, `r f(mh_sum[1, 3])`) |
+| $\mu_2$ | `r f(mh_sum[2, 1])` | (`r f(mh_sum[2, 2])`, `r f(mh_sum[2, 3])`) |
+
+: Metropolis-Hastings estimates (chain 1, after burn-in). Each credible interval leaves 5% in each tail.
+
+@fig-mh-post shows the estimated marginal posteriors. They are similar in location and spread to the Gibbs estimates in @fig-gibbs-post, although the MH histograms are slightly less smooth. The MH estimates agree with the Gibbs estimates to about two decimal places. The remaining differences are consistent with Monte Carlo error. The MCSEs of the MH posterior means are `r f(mh_diag[1, "MCSE_mean"], 4)` ($\mu_1$) and `r f(mh_diag[2, "MCSE_mean"], 4)` ($\mu_2$), and the differences from the Gibbs means are `r f(abs(mh_sum[1, 1] - gibbs_sum[1, 1]), 4)` and `r f(abs(mh_sum[2, 1] - gibbs_sum[2, 1]), 4)`, a few MCSEs at most.
+
+### Part (f): Optimal variational factors
+
+From Part (a), the log joint density is
+
+$$
+\log p(\mu_1, \mu_2, \mathbf x, \mathbf y)
+= -\frac12\sum_{i=1}^{n}(x_i - \mu_1)^2 - \sum_{j=1}^{m}(y_j - \mu_2)^2
+  - \frac12\left(3\mu_1^2 + 4\mu_1\mu_2 + 3\mu_2^2\right) + \text{const}.
+$$
+
+**Update for $q_{\mu_1}$.** Take the expectation with respect to $q^*_{\mu_2}$, using linearity of expectation. Terms that do not involve $\mu_1$ are absorbed into the constant, which is then fixed by normalising $q^*_{\mu_1}$. The only term that involves both parameters is $\mu_1\mu_2$, which is linear in $\mu_2$, so its expectation is $\mu_1 E_{\mu_2}[\mu_2]$:
+
+$$
+\begin{aligned}
+\log q^*_{\mu_1}(\mu_1)
+&= E_{\mu_2}\left[\log p(\mu_1, \mu_2, \mathbf x, \mathbf y)\right] + \text{const}\\
+&= -\frac12\left(n\mu_1^2 - 2\mu_1\sum_i x_i\right) - \frac12\left(3\mu_1^2 + 4\mu_1 E_{\mu_2}[\mu_2]\right) + \text{const}\\
+&= -\frac{n + 3}{2}\left(\mu_1 - \frac{\sum_i x_i - 2E_{\mu_2}[\mu_2]}{n + 3}\right)^2 + \text{const}.
+\end{aligned}
+$$
+
+**Update for $q_{\mu_2}$.** By the same argument, taking the expectation with respect to $q^*_{\mu_1}$:
+
+$$
+\begin{aligned}
+\log q^*_{\mu_2}(\mu_2)
+&= E_{\mu_1}\left[\log p(\mu_1, \mu_2, \mathbf x, \mathbf y)\right] + \text{const}\\
+&= -\left(m\mu_2^2 - 2\mu_2\sum_j y_j\right) - \frac12\left(3\mu_2^2 + 4\mu_2 E_{\mu_1}[\mu_1]\right) + \text{const}\\
+&= -\frac{2m + 3}{2}\left(\mu_2 - \frac{2\sum_j y_j - 2E_{\mu_1}[\mu_1]}{2m + 3}\right)^2 + \text{const}.
+\end{aligned}
+$$
+
+Both are Normal kernels, obtained by completing the square exactly as in Part (a). Therefore $q^*_{\mu_1}(\mu_1)$ is the pdf of $\text{N}(\mu_1^*, \sigma_1^{2*})$ and $q^*_{\mu_2}(\mu_2)$ is the pdf of $\text{N}(\mu_2^*, \sigma_2^{2*})$, where
+
+$$
+\mu_1^* = \frac{\sum_{i=1}^{100} x_i - 2E_{\mu_2}[\mu_2]}{103}, \qquad
+\sigma_1^{2*} = \frac{1}{103},
+$$
+
+$$
+\mu_2^* = \frac{2\sum_{j=1}^{150} y_j - 2E_{\mu_1}[\mu_1]}{303}, \qquad
+\sigma_2^{2*} = \frac{1}{303},
+$$
+
+with $E_{\mu_1}[\mu_1] = \mu_1^*$ and $E_{\mu_2}[\mu_2] = \mu_2^*$.
+
+These updates have exactly the form of the Gibbs full conditionals in Part (a), with the other parameter replaced by its expectation under the current variational factor. The variances do not depend on the other factor, so CAVI only needs to iterate the two means.
+
+### Part (g): ELBO
+
+The ELBO is
+
+$$
+\text{ELBO}(q) = E_q\left[\log p(\mu_1, \mu_2, \mathbf x, \mathbf y)\right] - E_{\mu_1}\left[\log q_{\mu_1}(\mu_1)\right] - E_{\mu_2}\left[\log q_{\mu_2}(\mu_2)\right],
+$$
+
+with $q_{\mu_1} = \text{N}(\mu_1^*, \sigma_1^{2*})$ and $q_{\mu_2} = \text{N}(\mu_2^*, \sigma_2^{2*})$. Under $q$:
+
+$$
+E_{\mu_1}\left[(x_i - \mu_1)^2\right] = \sigma_1^{2*} + (\mu_1^*)^2 - 2x_i\mu_1^* + x_i^2, \qquad
+E_{\mu_2}\left[(y_j - \mu_2)^2\right] = \sigma_2^{2*} + (\mu_2^*)^2 - 2y_j\mu_2^* + y_j^2,
+$$
+
+$$
+E_{\mu_k}\left[\mu_k^2\right] = \sigma_k^{2*} + (\mu_k^*)^2 \quad (k = 1, 2), \qquad
+E_q\left[\mu_1\mu_2\right] = E_{\mu_1}[\mu_1]\,E_{\mu_2}[\mu_2] = \mu_1^*\mu_2^*,
+$$
+
+where the identities for $E[\mu_k^2]$ and $E[(x_i - \mu_1)^2]$ use $E[Z^2] = \text{Var}(Z) + (E[Z])^2$, and $E_q[\mu_1\mu_2] = \mu_1^*\mu_2^*$ uses the mean-field factorisation $q(\mu_1, \mu_2) = q_{\mu_1}(\mu_1)\,q_{\mu_2}(\mu_2)$, under which $\mu_1$ and $\mu_2$ are independent. For a Normal factor, the entropy follows from $\log q_{\mu_k}(\mu_k) = -\frac12\log(2\pi\sigma_k^{2*}) - \frac{(\mu_k - \mu_k^*)^2}{2\sigma_k^{2*}}$ and $E_{\mu_k}\left[(\mu_k - \mu_k^*)^2\right] = \sigma_k^{2*}$:
+
+$$
+-E_{\mu_k}\left[\log q_{\mu_k}(\mu_k)\right] = \frac12\log\left(2\pi\sigma_k^{2*}\right) + \frac12 = \frac12\log\left(2\pi e\,\sigma_k^{2*}\right) = \frac12\log\sigma_k^{2*} + \text{const}.
+$$
+
+Substituting these into the log joint from Part (f) gives, up to an additive constant,
+
+$$
+\begin{aligned}
+\text{ELBO}
+&= -\frac12\sum_{i=1}^{100}\left[\sigma_1^{2*} + (\mu_1^*)^2 - 2x_i\mu_1^* + x_i^2\right]
+   - \sum_{j=1}^{150}\left[\sigma_2^{2*} + (\mu_2^*)^2 - 2y_j\mu_2^* + y_j^2\right]\\
+&\quad - \frac12\left[3\left(\sigma_1^{2*} + (\mu_1^*)^2\right) + 4\mu_1^*\mu_2^* + 3\left(\sigma_2^{2*} + (\mu_2^*)^2\right)\right]
+   + \frac12\log\sigma_1^{2*} + \frac12\log\sigma_2^{2*} + \text{const}.
+\end{aligned}
+$$
+
+The constant collects the Normal normalising constants of the likelihood and prior, and the $\frac12\log(2\pi e)$ terms from the entropies. None of these depend on the variational parameters. The $x_i^2$ and $y_j^2$ terms are also constant and could be dropped. They are retained so that the ELBO is shown in full.
+
+### Part (h): CAVI implementation
+
+Each CAVI iteration updates $q_{\mu_1}$ using the current $\mu_2^*$, then updates $q_{\mu_2}$ using the new $\mu_1^*$, with the formulas from Part (f). The ELBO from Part (g) is evaluated at the initial values (iteration 0) and after each full iteration. The algorithm stops when the ELBO changes by less than $10^{-5}$ or after 100 iterations. The initial values are $(\mu_1^*, \sigma_1^{2*}, \mu_2^*, \sigma_2^{2*})$. Only $\mu_2^*$ affects the first update, but all four enter the initial ELBO.
+
+```{r}
+#| label: p2h-cavi
+elbo <- function(m1, s1sq, m2, s2sq) {
+  E1 <- s1sq + m1^2                                  # E[mu1^2]
+  E2 <- s2sq + m2^2                                  # E[mu2^2]
+  -0.5 * (n * E1 - 2 * m1 * Sx + sum(x^2)) -         # x likelihood
+         (m * E2 - 2 * m2 * Sy + sum(y^2)) -         # y likelihood
+   0.5 * (3 * E1 + 4 * m1 * m2 + 3 * E2) +           # prior
+   0.5 * log(s1sq) + 0.5 * log(s2sq)                 # entropies
+}
+
+cavi <- function(m1, s1sq, m2, s2sq, max_iter = 100, tol = 1e-5) {
+  init <- c(m1 = m1, s1sq = s1sq, m2 = m2, s2sq = s2sq)
+  el <- elbo(m1, s1sq, m2, s2sq)                     # ELBO at the initial values
+  for (it in 1:max_iter) {
+    m1 <- (Sx - 2 * m2) / (n + 3);         s1sq <- 1 / (n + 3)       # update q(mu1)
+    m2 <- (2 * Sy - 2 * m1) / (2 * m + 3); s2sq <- 1 / (2 * m + 3)   # update q(mu2)
+    el <- c(el, elbo(m1, s1sq, m2, s2sq))
+    if (abs(el[it + 1] - el[it]) < tol) break
+  }
+  list(init = init, m1 = m1, s1sq = s1sq, m2 = m2, s2sq = s2sq,
+       elbo = el, iter = it)
+}
+
+inits <- list(run1 = c(0, 1, 0, 1),
+              run2 = c(10, 5, -10, 5),
+              run3 = c(-50, 0.01, 50, 0.01))
+runs <- lapply(inits, function(v) do.call(cavi, as.list(v)))
+
+res <- t(sapply(runs, function(r)
+  c(r$init, iterations = r$iter,
+    m1_star = r$m1, s1sq_star = r$s1sq,
+    m2_star = r$m2, s2sq_star = r$s2sq,
+    final_ELBO = tail(r$elbo, 1))))
+signif(res, 7)
+```
+
+```{r}
+#| label: p2h-elbo-check
+# ELBO trajectory of each run, and whether it increased at every iteration
+lapply(runs, function(r) signif(r$elbo, 10))
+# Change in ELBO at each iteration (all should be positive)
+lapply(runs, function(r) signif(diff(r$elbo), 4))
+sapply(runs, function(r) all(diff(r$elbo) > 0))
+```
+
+```{r}
+#| label: fig-cavi-elbo
+#| fig-cap: "ELBO against CAVI iteration for the three runs (iteration 0 = initial values). Top row: full trajectory. Bottom row: iterations 1 onwards, on a finer vertical scale. The ELBO increases at every iteration and converges within three iterations."
+#| fig-height: 6
+op <- par(mfrow = c(2, 3), mar = c(4, 5, 2, 1))
+for (k in seq_along(runs)) {
+  el <- runs[[k]]$elbo
+  plot(0:(length(el) - 1), el, type = "b", pch = 19,
+       xlab = "Iteration", ylab = "ELBO", main = names(runs)[k])
+}
+for (k in seq_along(runs)) {
+  el <- runs[[k]]$elbo
+  plot(1:(length(el) - 1), el[-1], type = "b", pch = 19,
+       xlab = "Iteration", ylab = "ELBO",
+       main = paste(names(runs)[k], "(from iteration 1)"))
+}
+par(op)
+```
+
+**Monotonicity.** @fig-cavi-elbo plots the ELBO against iteration for each run. The first update produces a very large increase, so the top row cannot show the later changes. The bottom row zooms in from iteration 1. The printed ELBO changes above are positive at every iteration of every run (the `all(diff(...) > 0)` check returns `TRUE` for all three), so the ELBO strictly increases throughout. This is as CAVI guarantees, since each update maximises the ELBO exactly in one factor with the other held fixed. Each run meets the $10^{-5}$ stopping rule after `r runs$run1$iter` iterations.
+
+**Result.** All three runs, from very different initial values, converge to the same solution with the same final ELBO, $`r f(tail(runs$run1$elbo, 1), 4)`$. This is expected. For fixed variances, the ELBO in Part (g) is a quadratic function of $(\mu_1^*, \mu_2^*)$ with Hessian $-\begin{pmatrix} 103 & 2 \\ 2 & 303 \end{pmatrix}$, which is negative definite, so the ELBO is strictly concave in the means and has a unique maximiser. The optimal variances, $1/103$ and $1/303$, do not depend on the initial values at all, so the initial variances only affect the ELBO at iteration 0. Because all runs tie on the highest ELBO, run 1 is reported. Its initial values were $(\mu_1^*, \sigma_1^{2*}, \mu_2^*, \sigma_2^{2*}) = (0, 1, 0, 1)$, and the resulting factors are
+
+$$
+q^*_{\mu_1}(\mu_1) = \text{N}\left(`r f(runs$run1$m1, 4)`,\ `r f(runs$run1$s1sq, 6)`\right), \qquad
+q^*_{\mu_2}(\mu_2) = \text{N}\left(`r f(runs$run1$m2, 4)`,\ `r f(runs$run1$s2sq, 6)`\right),
+$$
+
+where $\sigma_1^{2*} = 1/103$ and $\sigma_2^{2*} = 1/303$.
+
+#### Comparison with the exact posterior
+
+The model is conjugate, so the exact posterior is bivariate Normal. Its precision matrix is $\boldsymbol\Lambda = \text{diag}(100, 300) + \boldsymbol\Sigma^{-1} = \begin{pmatrix} 103 & 2 \\ 2 & 303 \end{pmatrix}$, and its mean is $\boldsymbol\Lambda^{-1}\left(\sum_i x_i,\ 2\sum_j y_j\right)^\top$. This follows from the same completing-the-square argument as Part (a), applied to both parameters jointly. It is used only as a check on the three methods.
+
+```{r}
+#| label: p2-exact-check
+Lambda     <- diag(c(n, 2 * m)) + Sigma_inv
+exact_mean <- solve(Lambda, c(Sx, 2 * Sy))
+exact_cov  <- solve(Lambda)
+exact_sd   <- sqrt(diag(exact_cov))
+exact_ci   <- cbind(exact_mean + qnorm(0.05) * exact_sd,
+                    exact_mean + qnorm(0.95) * exact_sd)
+
+cavi_mean <- c(runs$run1$m1, runs$run1$m2)
+cavi_sd   <- sqrt(c(runs$run1$s1sq, runs$run1$s2sq))
+comparison <- rbind(
+  Gibbs = c(gibbs_sum[, "mean"], apply(gibbs_keep, 2, sd),
+            gibbs_sum[1, 2:3], gibbs_sum[2, 2:3]),
+  MH    = c(mh_sum[, "mean"],    apply(mh_keep, 2, sd),
+            mh_sum[1, 2:3], mh_sum[2, 2:3]),
+  CAVI  = c(cavi_mean, cavi_sd,
+            cavi_mean[1] + qnorm(c(0.05, 0.95)) * cavi_sd[1],
+            cavi_mean[2] + qnorm(c(0.05, 0.95)) * cavi_sd[2]),
+  Exact = c(exact_mean, exact_sd, exact_ci[1, ], exact_ci[2, ]))
+colnames(comparison) <- c("mean_mu1", "mean_mu2", "sd_mu1", "sd_mu2",
+                          "mu1_5%", "mu1_95%", "mu2_5%", "mu2_95%")
+round(comparison, 4)
+c(posterior_correlation = cov2cor(exact_cov)[1, 2])
+```
+
+All three methods agree closely with the exact posterior, whose means are $(`r f(exact_mean[1], 4)`, `r f(exact_mean[2], 4)`)$ and whose 90% intervals are $(`r f(exact_ci[1, 1])`, `r f(exact_ci[1, 2])`)$ for $\mu_1$ and $(`r f(exact_ci[2, 1])`, `r f(exact_ci[2, 2])`)$ for $\mu_2$.
+
+- **Gibbs and MH:** both are within a few MCSEs of the exact values. For example, the MH mean of $\mu_1$ differs from the exact mean by `r f(abs(mh_sum[1, 1] - exact_mean[1]), 4)`, compared with an MCSE of `r f(mh_diag[1, "MCSE_mean"], 4)`.
+- **CAVI means:** these equal the exact posterior means. This is a general property of mean-field VI when the target is Gaussian.
+- **CAVI variances:** these are the reciprocals of the diagonal entries of $\boldsymbol\Lambda$, $1/103$ and $1/303$. They are smaller than the true marginal variances, $303/31205$ and $103/31205$, which illustrates that mean-field VI underestimates posterior variance. Here the underestimation is negligible, because the posterior correlation is only `r f(cov2cor(exact_cov)[1, 2], 4)`. With a strongly correlated posterior it would be much larger.
+
+## References
+
+Jackman, S. (2009). *Bayesian Analysis for the Social Sciences*. Wiley.
+
+R Core Team (`r format(Sys.Date(), "%Y")`). *R: A Language and Environment for Statistical Computing*. R Foundation for Statistical Computing, Vienna, Austria. <https://www.R-project.org/>. Version `r paste(R.version$major, R.version$minor, sep = ".")` was used.
+
+All samplers and the CAVI algorithm were written in base R; no MCMC or variational inference packages were used. The report was produced with Quarto and the `knitr` package (Xie, Y. (2015). *Dynamic Documents with R and knitr*, 2nd ed. Chapman and Hall/CRC).
