@@ -1,0 +1,882 @@
+---
+title: "Great Barrier Reef Coral Trout Monitoring"
+subtitle: "Count regression and latent-class recovery for a reef-monitoring client"
+author: "Kai Marsh"
+format:
+  html:
+    output-file: report.html
+    toc: true
+    toc-depth: 2
+    number-sections: false
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    code-summary: "Show code"
+  pdf:
+    output-file: report.pdf
+    toc: true
+    number-sections: false
+    geometry: margin=2.2cm
+    pdf-engine: xelatex
+    fig-pos: "H"
+    echo: false
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+::: {.callout-note title="About this report"}
+This report covers two linked engagements for a (fictional) reef-monitoring client. **Part I** models how coral trout abundance in real AIMS survey data varies with latitude and fishing zone. **Part II** recovers lost management classifications from survey counts with a finite mixture model fitted by a hand-written EM algorithm. The work was originally done as coursework for a university statistics course (University of Melbourne, 2026) and has been rewritten here as a single consulting report.
+:::
+
+::: {.callout-tip title="Key findings"}
+- **No-take zones hold about 76% more coral trout than reefs open to fishing** (rate ratio 1.76, 95% CI 1.25–2.49). Southern reefs hold about 4× as many as Northern reefs (95% CI 2.43–6.45×).
+- A plain Poisson model suggested the zoning effect differed by latitude (p ≈ 0.009). **That result was an artefact of overdispersion** (counts about 5.4× more variable than Poisson allows). Once this was accounted for, the interaction vanished (p ≈ 0.42), so a single, consistent zoning effect is reported.
+- The data are observational, from a single year, so the zoning association should not be read as causal.
+- **Lost classifications (Part II, simulated data):** a three-class Poisson mixture recovers class shares of about 29% / 29% / 42% with typical counts of about 6, 20 and 38. 87% of reefs can be assigned to a class with more than 90% confidence; the rest sit between classes and should be reported with that uncertainty.
+:::
+
+```{r}
+#| label: setup
+#| code-summary: "Packages used"
+
+library(ggplot2)   # exploratory and diagnostic plots
+```
+
+# Part I: Coral trout abundance by latitude band and fishing zone
+
+## Client brief
+
+The Monitoring Manager asked how expected coral trout (*Plectropomus*) counts in the 2012 surveys differed among three latitude bands and between reefs **open to fishing** and **no-take** zones, whether any zoning difference varied by latitude, how certain the results are, and what should *not* be concluded. The report is written for two audiences: reef managers, who need plain-language conclusions and uncertainty, and a technical reviewer, who needs to be able to check the model formulation, code and diagnostics.
+
+## Data
+
+The data are a site-level extract of the [AIMS Long-Term Monitoring Program visual census fish dataset](https://apps.aims.gov.au/metadata/view/5be0b340-4ade-11dc-8f56-00008a07204e) (2012 surveys). Counts of all *Plectropomus* species were summed over five equal-length transects per site, giving 120 anonymised sites. The latitude bands (Northern: north of 17.9°S; Central: 17.9–19°S; Southern: south of 19°S) were created for the analysis and are not official AIMS regions. *Data sourced from the Australian Institute of Marine Science (AIMS).*
+
+| Variable | Description |
+|---|---|
+| `site` | Anonymised monitoring-site identifier |
+| `latitude_band` | `Northern`, `Central`, or `Southern` |
+| `zone` | `Open` or `No-take` |
+| `coral_trout` | Total coral trout recorded across five transects at the site |
+
+```{r}
+#| label: load-data
+
+reef <- read.csv("data/aims_coral_trout_sites_2012.csv")
+
+reef$latitude_band <- factor(
+  reef$latitude_band,
+  levels = c("Northern", "Central", "Southern")
+)
+reef$zone <- factor(
+  reef$zone,
+  levels = c("Open", "No-take")
+)
+
+dim(reef)
+names(reef)
+str(reef)
+summary(reef)
+```
+
+## 1. Executive summary
+ 
+We were asked how coral trout abundance in the 2012 surveys varied with a site's latitude band (Northern, Central, Southern) and with fishing zone (open versus no-take), and whether the zone effect differed between bands. We analysed the 120 site-level counts with a count-regression model that allows for these counts varying far more from site to site than a basic count model assumes.
+ 
+Two patterns stand out. There is a strong north–south gradient: Southern sites hold roughly four times as many coral trout as Northern or Central sites, which are similar to each other. And no-take sites hold meaningfully more coral trout than open sites — about **76% more on average** — an uplift that, once the large site-to-site variability is accounted for, looks similar across all three bands rather than confined to one.
+ 
+The results are uncertain: the plausible range for the no-take difference is wide (roughly **25% to 149%** more). A simpler analysis that ignores the extra variability *appears* to find a band-specific zoning effect, but that finding does not survive once the variability is respected, so we do not claim one.
+ 
+The most important limitation is that this is **observational** data from a single year. Zones were not assigned at random, so higher counts in no-take zones cannot be attributed to zoning itself — other differences between reefs (habitat, depth, history) could contribute. We recommend continued monitoring and caution against causal language.
+ 
+## 2. Problem and data understanding
+ 
+**Statistical objectives.** The client's question translates into estimating how the *expected* (mean) site-level coral trout count depends on `latitude_band` and `zone`, and testing whether the effect of `zone` depends on `latitude_band` (a band × zone interaction).
+ 
+**Variables and roles.** The response is `coral_trout`, a non-negative integer count. The two explanatory variables are the factors `latitude_band` (three levels) and `zone` (two levels).
+ 
+**Observational unit and design.** The unit is a monitoring **site**; there are 120 sites. Each row is one site, and each count is the total number of coral trout recorded across the **five equal-length transects** at that site. Because every site aggregates the same number of equal-length transects, the counts are on a common basis and no offset for survey effort is required. The design is **observational** and cross-sectional (a single survey year, 2012); zone was not randomly allocated, so associations must not be read as causal.
+ 
+**Structure checks.** The `str()`/`summary()` output in the data section confirms 120 rows and 4 columns, with `latitude_band` and `zone` as factors in the intended level orders (references `Northern` and `Open`). The check below confirms no missing values and shows group sample sizes.
+ 
+```{r}
+#| label: data-checks
+ 
+colSums(is.na(reef))                 # missing values
+table(reef$latitude_band, reef$zone) # group sample sizes
+```
+ 
+The data are complete (no missing values). The design is balanced on zone (60 open, 60 no-take) and near-balanced on band (Northern 36, Central 36, Southern 48), which is reassuring for comparing groups.
+ 
+## 3. Exploratory analysis
+ 
+The response distribution, the group differences, and the possible interaction are examined in turn. Numerical summaries come first because they quantify both the centre and the spread the model must accommodate.
+ 
+```{r}
+#| label: group-summary
+ 
+grp <- aggregate(coral_trout ~ latitude_band + zone, data = reef,
+                 FUN = function(x) c(n = length(x), mean = mean(x),
+                                     var = var(x)))
+grp <- do.call(data.frame, grp)
+grp$var_mean_ratio <- round(grp$coral_trout.var / grp$coral_trout.mean, 2)
+grp$coral_trout.mean <- round(grp$coral_trout.mean, 2)
+grp$coral_trout.var  <- round(grp$coral_trout.var, 1)
+grp
+```
+ 
+The **variance is much larger than the mean in every group** (ratios from about 1.5 up to 13), which is the single most important feature for choosing a model: a distribution whose variance equals its mean will understate the spread badly.
+ 
+```{r}
+#| label: fig-dist
+#| fig-cap: "Distribution of site-level coral trout counts. The response is a right-skewed count with many small values, several zeros, and a long upper tail."
+#| fig-align: center
+#| out-width: "70%"
+ 
+ggplot(reef, aes(coral_trout)) +
+  geom_histogram(binwidth = 2, boundary = 0, fill = "grey40") +
+  labs(x = "Coral trout count per site", y = "Number of sites") +
+  theme_minimal(base_size = 12)
+```
+ 
+The response (@fig-dist) is a right-skewed count with a floor at zero (13 sites recorded zero) and a maximum of 61 — consistent with a count model rather than a normal-errors model.
+ 
+```{r}
+#| label: fig-groups
+#| fig-cap: "Site-level counts by latitude band and zone. Points are individual sites (jittered); the red diamond is the group mean. Southern sites are clearly higher, and no-take sites tend to sit above open sites within each band."
+#| fig-align: center
+#| out-width: "85%"
+ 
+ggplot(reef, aes(zone, coral_trout, colour = zone)) +
+  geom_jitter(width = 0.15, height = 0, alpha = 0.6) +
+  stat_summary(fun = mean, geom = "point", shape = 18,
+               size = 4, colour = "red") +
+  facet_wrap(~ latitude_band) +
+  labs(x = "Zone", y = "Coral trout count per site") +
+  theme_minimal(base_size = 12) + theme(legend.position = "none")
+```
+ 
+Showing the raw sites (@fig-groups) makes the amount of data per group explicit and reveals the variable spread — the Southern no-take group contains a few very large counts. Within every band the no-take mean exceeds the open mean.
+ 
+```{r}
+#| label: fig-interaction
+#| fig-cap: "Interaction plot of group mean counts. Lines are roughly parallel on the count scale for Northern and Central but the no-take gap is larger for Southern, suggesting a possible interaction to be tested formally."
+#| fig-align: center
+#| out-width: "70%"
+ 
+mgrp <- aggregate(coral_trout ~ latitude_band + zone, data = reef, FUN = mean)
+ggplot(mgrp, aes(latitude_band, coral_trout, group = zone, colour = zone)) +
+  geom_line() + geom_point(size = 2) +
+  labs(x = "Latitude band", y = "Mean coral trout count", colour = "Zone") +
+  theme_minimal(base_size = 12)
+```
+ 
+The interaction plot (@fig-interaction) shows the no-take advantage is small in the Northern and Central bands but larger in the Southern band. This *raw-scale* pattern is a reason to **include** an interaction in the initial model and test it formally — but note that on a multiplicative (log) scale a constant percentage effect naturally produces a larger absolute gap where counts are higher, so the plot alone cannot settle the question.
+ 
+## 4. Initial GLM choice and formulation
+ 
+**Model.** Let $Y_i$ be the coral trout count at site $i$ ($i = 1,\dots,120$), with expected count $\mu_i = \mathrm{E}(Y_i)$. We model
+$$
+Y_i \sim \text{Poisson}(\mu_i), \qquad \mathrm{Var}(Y_i) = \mu_i,
+$$
+with the $Y_i$ assumed **independent** across sites. We use the **log link**,
+$$
+\log(\mu_i) = \eta_i = \beta_0
+ + \beta_1 \mathrm{C}_i + \beta_2 \mathrm{S}_i
+ + \beta_3 \mathrm{NT}_i
+ + \beta_4 (\mathrm{C}_i\!\cdot\!\mathrm{NT}_i)
+ + \beta_5 (\mathrm{S}_i\!\cdot\!\mathrm{NT}_i),
+$$
+where $\mathrm{C}_i,\mathrm{S}_i$ are indicators for Central and Southern bands (Northern is the reference) and $\mathrm{NT}_i$ indicates a no-take site (Open is the reference).
+ 
+**Why this distribution and link.** The response is a count of events (fish seen along transects) with no fixed upper bound, so the **Poisson** is the natural starting distribution. The **log link** maps $\eta_i \in (-\infty,\infty)$ to $\mu_i = e^{\eta_i} > 0$, so **fitted expected counts are always valid (positive)** for any coefficient values, and it makes coefficients interpretable as **log rate ratios** (exponentiating gives the multiplicative change in expected count). We include the interaction initially because the client asks whether the zone effect differs by band.
+ 
+```{r}
+#| label: fit-initial
+ 
+m_int <- glm(coral_trout ~ latitude_band * zone,
+             family = poisson(link = "log"), data = reef)
+summary(m_int)
+```
+ 
+**Interpretation (log link).** $e^{\beta_0} = e^{0.916} \approx 2.50$ is the expected count at the reference site (Northern, Open). $e^{\beta_2} = e^{1.126}\approx 3.08$: Southern open sites are expected to have about three times the count of Northern open sites, while Central is close to Northern ($e^{\beta_1}\approx1.09$). $e^{\beta_3}=e^{0.304}\approx1.36$ is the no-take-to-open ratio *within the Northern band*. The interaction terms modify this zone ratio in the other bands: for Southern the no-take advantage is scaled by a further $e^{\beta_5}=e^{0.402}\approx1.50$. Because an interaction is present, the zone main effect ($\beta_3$) must not be read as a global zone effect — it applies only to the reference band. Section 5 tests whether the interaction is needed.
+ 
+## 5. Initial model comparison
+ 
+The interaction model is compared with the additive model
+$\log(\mu_i)=\beta_0+\beta_1 \mathrm{C}_i+\beta_2 \mathrm{S}_i+\beta_3 \mathrm{NT}_i$.
+The models are nested (additive = interaction with $\beta_4=\beta_5=0$), so under the Poisson assumption a difference-in-deviance (likelihood-ratio) test applies.
+$$
+H_0:\ \beta_4=\beta_5=0 \quad\text{vs}\quad H_1:\ \text{at least one} \neq 0.
+$$
+ 
+```{r}
+#| label: compare-initial
+ 
+m_add <- glm(coral_trout ~ latitude_band + zone,
+             family = poisson(link = "log"), data = reef)
+anova(m_add, m_int, test = "Chisq")
+AIC(m_int, m_add)
+```
+ 
+The deviance drops by about **9.40 on 2 degrees of freedom** ($p \approx 0.009$), and AIC prefers the interaction model (939.3 vs 944.7). **Taken at face value under the Poisson model, the interaction appears warranted.** This is only a provisional decision: both the likelihood-ratio test and AIC assume the Poisson variance is correct, which has not yet been checked. Section 6 shows this assumption fails, and Section 7 revisits the conclusion.
+ 
+## 6. Dispersion assessment
+ 
+The Poisson model assumes $\mathrm{Var}(Y_i)=\mu_i$, i.e. dispersion $\phi=1$. Dispersion is estimated from the Pearson residuals of the initial (interaction) model as $\hat\phi = \frac{1}{n-p}\sum_i r_{P,i}^2$, supported by a residual-deviance goodness-of-fit test.
+ 
+```{r}
+#| label: dispersion
+ 
+phi_hat <- sum(residuals(m_int, type = "pearson")^2) / df.residual(m_int)
+phi_hat
+# Goodness-of-fit: residual deviance vs chi-square
+pchisq(deviance(m_int), df.residual(m_int), lower.tail = FALSE)
+```
+ 
+The estimated dispersion is $\hat\phi \approx 5.4$ — the counts are **more than five times as variable as the Poisson allows**. The goodness-of-fit test is decisive: residual deviance $\approx 570.6$ on 114 df gives $p \approx 10^{-62}$, overwhelming evidence that the Poisson variance is inadequate (**overdispersion**), as the exploratory variance-to-mean ratios already suggested.
+ 
+**Implication.** Poisson standard errors are too small by a factor of about $\sqrt{5.4}\approx 2.3$. All Poisson $z$-tests, the Section 5 likelihood-ratio test, and AIC are therefore **unreliable**: they will overstate significance. Overdispersion must therefore be addressed before drawing conclusions.
+ 
+## 7. Overdispersion model and final selection
+ 
+The **quasi-Poisson** model keeps the log-link mean structure but relaxes the variance to $\mathrm{Var}(Y_i)=\phi\,\mu_i$, with $\phi$ estimated from the data. It is appropriate here because the mean model is sensible but the variance is inflated roughly in proportion to the mean.
+ 
+Because quasi-Poisson is a quasi-likelihood, **AIC and the likelihood-ratio $\chi^2$ test are not valid** for it. The correct nested comparison uses an **$F$-test**, which divides the mean deviance change by the estimated dispersion.
+ 
+```{r}
+#| label: quasi
+ 
+m_int_q <- glm(coral_trout ~ latitude_band * zone,
+               family = quasipoisson(link = "log"), data = reef)
+m_add_q <- glm(coral_trout ~ latitude_band + zone,
+               family = quasipoisson(link = "log"), data = reef)
+anova(m_add_q, m_int_q, test = "F")
+```
+ 
+Once overdispersion is respected, the interaction is **not supported**: $F \approx 0.87$ on $(2, 114)$ df, $p \approx 0.42$. The deviance reduction that looked convincing in Section 5 is small relative to the genuine site-to-site variability. **Accounting for overdispersion inflates the standard errors by ~2.3× and reverses the model-choice conclusion.**
+ 
+We therefore select the **additive quasi-Poisson model** as the final model:
+$$
+Y_i \sim \text{quasi-Poisson}, \quad \mathrm{Var}(Y_i)=\phi\mu_i,\quad
+\log(\mu_i)=\beta_0+\beta_1 \mathrm{C}_i+\beta_2 \mathrm{S}_i+\beta_3 \mathrm{NT}_i .
+$$
+ 
+```{r}
+#| label: final-model
+summary(m_add_q)
+```
+ 
+The additive fit estimates $\hat\phi \approx 5.4$. Its coefficients are the basis for the client answer in Section 9; because no interaction is retained, the zone coefficient now represents a single no-take-to-open ratio common to all bands.
+ 
+## 8. Diagnostics and model alternatives
+ 
+The final additive quasi-Poisson model is assessed with residual, leverage, and influence diagnostics. (Quasi-Poisson shares the Poisson deviance/leverage machinery, so standardised residuals and Cook's distance are defined as usual.)
+ 
+```{r}
+#| label: fig-resid
+#| fig-cap: "Standardised deviance residuals against the fitted linear predictor for the final additive quasi-Poisson model. Residuals are broadly centred with no strong curvature; a few large positive residuals correspond to high-count sites."
+#| fig-align: center
+#| out-width: "70%"
+ 
+reef$fitted_eta <- predict(m_add_q, type = "link")
+reef$std_res    <- rstandard(m_add_q, type = "deviance")
+ggplot(reef, aes(fitted_eta, std_res)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = c(-2, 0, 2), linetype = c(2, 1, 2)) +
+  labs(x = "Fitted linear predictor  log(mu-hat)",
+       y = "Standardised deviance residual") +
+  theme_minimal(base_size = 12)
+```
+ 
+```{r}
+#| label: influence
+ 
+n <- nrow(reef); p <- length(coef(m_add_q))
+reef$hat  <- hatvalues(m_add_q)
+reef$cook <- cooks.distance(m_add_q)
+reef$pearson_std <- rstandard(m_add_q, type = "pearson")
+ 
+# Sites with the largest standardised residuals / influence
+head(reef[order(-abs(reef$pearson_std)),
+          c("site","latitude_band","zone","coral_trout","hat","pearson_std","cook")], 4)
+cat("leverage range:", round(range(reef$hat), 3),
+    "| mean p/n =", round(p/n, 3),
+    "| Cook's guide 4/n =", round(4/n, 3), "\n")
+```
+ 
+```{r}
+#| label: fig-cook
+#| fig-cap: "Cook's distance by site for the final model. The dashed line is the 4/n guide. AIMS022 stands well clear of every other site; AIMS024 is the next largest."
+#| fig-align: center
+#| out-width: "75%"
+ 
+reef$flag <- ifelse(reef$cook > 4/n, as.character(reef$site), "")
+ggplot(reef, aes(seq_len(nrow(reef)), cook)) +
+  geom_segment(aes(xend = seq_len(nrow(reef)), yend = 0), colour = "grey70") +
+  geom_point(size = 1.5) +
+  geom_hline(yintercept = 4/n, linetype = 2, colour = "red") +
+  geom_text(aes(label = flag), hjust = -0.15, size = 2.8) +
+  labs(x = "Site index", y = "Cook's distance") +
+  theme_minimal(base_size = 12)
+```
+ 
+**Residuals vs fitted** (@fig-resid) show no systematic curvature, supporting the additive log-mean structure; the mild funnel is expected for counts. Only three sites exceed a standardised deviance residual of 2 in absolute value. **Leverage** lies in a narrow band ($0.025$ to $0.038$, around the average $p/n = 0.033$): the design is balanced on both factors, and the only variation comes from the GLM weights, which differ with the fitted mean. No site is therefore unusual in predictor space. **Large residuals and Cook's distance** (@fig-cook) both flag **site AIMS022** (Southern, no-take, count 61 against a fitted mean of 14.9): standardised Pearson residual $5.2$ (standardised deviance residual $3.9$) and Cook's distance $0.27$, far above the $4/n = 0.033$ guide and roughly twice the next largest. AIMS024 (count 45, Cook's $0.11$) follows. Both are influential because they are genuinely large counts, not because of high leverage.
+ 
+To check robustness, the final model is refitted without AIMS022. We do **not** remove it from the primary analysis — it is a valid observation.
+ 
+```{r}
+#| label: refit-no-aims022
+ 
+m_no22 <- glm(coral_trout ~ latitude_band + zone,
+              family = quasipoisson(link = "log"),
+              data = subset(reef, site != "AIMS022"))
+round(cbind(full = coef(m_add_q), without_AIMS022 = coef(m_no22)), 3)
+```
+ 
+Dropping AIMS022 changes the zone coefficient only modestly (no-take rate ratio $e^{0.565}=1.76$ becomes $e^{0.462}=1.59$) and leaves the strong Southern effect essentially unchanged. **The substantive conclusions are robust**, so we retain the site.
+ 
+**Alternative model.** The persistent large dispersion and heavy upper tail indicate variance growing faster than the mean in the busiest groups, which suggests a **negative binomial** GLM (variance $\mu+\mu^2/\theta$) as a reasonable alternative; it would provide a full likelihood and hence AIC-based comparison. For the client's questions the quasi-Poisson is adequate and directly targets the mean structure and its uncertainty, so we report it as the final model and flag negative binomial as a sensitivity check.
+ 
+## 9. Estimates and uncertainty for the client
+ 
+The final additive quasi-Poisson model gives the fitted **site-level mean counts** below for every band × zone combination, with 95% confidence intervals computed on the link scale and back-transformed.
+ 
+```{r}
+#| label: fitted-means
+ 
+grid <- expand.grid(
+  latitude_band = factor(c("Northern","Central","Southern"),
+                         levels = c("Northern","Central","Southern")),
+  zone = factor(c("Open","No-take"), levels = c("Open","No-take")))
+pl <- predict(m_add_q, newdata = grid, type = "link", se.fit = TRUE)
+tcrit <- qt(0.975, df.residual(m_add_q))
+grid$fitted_mean <- round(exp(pl$fit), 2)
+grid$lower <- round(exp(pl$fit - tcrit * pl$se.fit), 2)
+grid$upper <- round(exp(pl$fit + tcrit * pl$se.fit), 2)
+grid
+```
+ 
+The fitted site-level means are about **2.1 (Northern, Open)**, **3.8 (Northern, No-take)**, **2.1 / 3.7 (Central Open / No-take)**, and **8.5 / 14.9 (Southern Open / No-take)** coral trout per site.
+ 
+Next, the client's headline comparison — **no-take versus open**. Because the interaction was not retained, this is the single `zone` coefficient, interpreted on the link scale and then exponentiated to a rate ratio.
+ 
+```{r}
+#| label: zone-contrast
+ 
+b  <- coef(m_add_q)["zoneNo-take"]
+se <- sqrt(vcov(m_add_q)["zoneNo-take","zoneNo-take"])
+ci_link <- b + c(-1, 1) * tcrit * se
+res <- rbind(
+  "log scale (linear predictor)" = c(estimate = b, lower = ci_link[1], upper = ci_link[2]),
+  "response scale (rate ratio)"  = exp(c(estimate = b, lower = ci_link[1], upper = ci_link[2])))
+round(res, 3)
+```
+ 
+On the linear-predictor scale the no-take effect is $\hat\beta = 0.565$ (95% CI $0.220$ to $0.910$). Back-transformed, the **expected coral trout count at no-take sites is about 1.76 times that at open sites (95% CI 1.25 to 2.49)** — roughly **76% higher, with a plausible range of about 25% to 149%**. For the band effect, Southern sites have about $e^{1.377}=3.96$ times the expected count of Northern sites (95% CI 2.43 to 6.45), while Central and Northern are indistinguishable.
+ 
+**Answering the client.** In the 2012 surveys, expected coral trout counts were about four times higher in the Southern band than in the Central or Northern bands, and no-take sites held about 76% more coral trout than open sites. There is **no reliable evidence that the zone effect differed across bands** once site-to-site variability was accounted for, so a single, consistent no-take difference best describes the data. The estimates are uncertain — the no-take interval is wide — and because the survey is **observational and from a single year**, the association should **not** be read as proof that zoning *causes* higher abundance; unmeasured differences between reefs may contribute. We recommend continued monitoring across years before drawing management conclusions.
+
+
+# Part II: Recovering lost management classifications
+
+## Client brief
+
+During a database migration the client lost the table linking each surveyed reef to its management class (level of fishing pressure). From the program's design there were **three** classes. The client asked: *how many reefs fell into each class, what was the typical count in each class, and how confident can we be about the class of any individual reef?* A later backup recovered 100 further reef-seasons that are all known to belong to the second class, and the client also wanted to know whether these improve the estimates.
+
+This is a **latent-structure** problem: the grouping variable exists and drives the counts but was never observed. A finite Poisson mixture treats each reef's class as an unobserved random variable, and the EM algorithm gives maximum-likelihood estimates without ever seeing the labels. All EM code below is written in base R.
+
+::: {.callout-warning title="Simulated data"}
+The Part II counts are **simulated for teaching purposes** and the lost-table scenario is constructed. Nothing in Part II is a finding about the real Great Barrier Reef.
+:::
+
+## Data and model
+
+Each observation is the total coral trout count at one reef over one season, with survey effort standardised. `archive_unlabelled.txt` holds 300 reef-season counts of unknown class; `backup_class2.txt` holds 100 counts known to be from class 2.
+
+```{r}
+#| label: fig-load-data
+#| fig-cap: "Left: the 300 recovered archive counts (class unknown). Right: the 100 labelled backup counts, all from class 2."
+#| fig-width: 9
+#| fig-height: 4
+
+X  <- scan(file = "data/archive_unlabelled.txt", what = double())
+X0 <- scan(file = "data/backup_class2.txt", what = double())
+c(archive = length(X), backup = length(X0))
+par(mfrow = c(1, 2))
+hist(X, breaks = 30, main = "Archive counts (n = 300)",
+     xlab = "Seasonal coral trout count", ylab = "Number of reef-seasons")
+hist(X0, breaks = 15, main = "Labelled class-2 counts (n = 100)",
+     xlab = "Seasonal coral trout count", ylab = "Number of reef-seasons")
+par(mfrow = c(1, 1))
+```
+
+**Model A** uses the archive alone. For reef $i = 1,\ldots,300$ with unobserved class $Z_i$,
+$$
+Z_i \sim \text{categorical}(\pi_1, \pi_2, \pi_3), \qquad X_i \mid Z_i = k \sim \text{Poisson}(\lambda_k), \quad k = 1,2,3,
+$$
+with $\pi_3 = 1 - \pi_1 - \pi_2$. Here $\pi_k$ is the share of reefs in class $k$ and $\lambda_k$ its expected seasonal count. **Model B** adds the 100 labelled reefs, $X_i \sim \text{Poisson}(\lambda_2)$ for $i = 301,\ldots,400$, which share $\lambda_2$ but carry no latent label.
+
+## Model A: archive counts only
+
+The histogram of the 300 archive counts (@fig-load-data, left) shows three clear clusters, roughly around 5, 20 and 40, which is consistent with the three management classes the client described.
+
+### (a) Expected complete log-likelihood
+
+Throughout, write $\pi_3 = 1 - \pi_1 - \pi_2$ and $f(x;\lambda) = \lambda^x e^{-\lambda}/x!$. Let $n = 300$.
+
+**Complete-data likelihood.** If the labels $Z$ were observed, the pair $(X_i, Z_i)$ would have joint probability
+$$
+P(X_i = x_i, Z_i = z_i \mid \theta) = P(Z_i = z_i \mid \theta)\,P(X_i = x_i \mid Z_i = z_i, \theta)
+= \prod_{k=1}^{3} \big[\pi_k\, f(x_i;\lambda_k)\big]^{\mathbb{1}(z_i = k)},
+$$
+since exactly one indicator equals 1. By independence across reefs,
+$$
+P(X, Z \mid \theta) = \prod_{i=1}^{n} \prod_{k=1}^{3} \big[\pi_k\, f(x_i;\lambda_k)\big]^{\mathbb{1}(Z_i = k)}.
+$$
+
+**Complete log-likelihood.**
+$$
+\log P(X, Z \mid \theta) = \sum_{i=1}^{n} \sum_{k=1}^{3} \mathbb{1}(Z_i = k)\Big[\log \pi_k + x_i \log \lambda_k - \lambda_k - \log x_i!\Big].
+$$
+
+**Expectation over $Z \mid X, \theta^0$.** The log-likelihood is linear in the indicators, and the only random quantities (given $X$) are the $\mathbb{1}(Z_i = k)$. Since the $Z_i$ are independent given $X$ and $Z_i$ depends on $X$ only through $X_i$,
+$$
+E_{Z \mid X, \theta^0}\big[\mathbb{1}(Z_i = k)\big] = P(Z_i = k \mid X_i = x_i, \theta^0) =: \gamma_{ik}.
+$$
+Therefore
+$$
+\boxed{\;Q(\theta, \theta^0) = \sum_{i=1}^{n} \sum_{k=1}^{3} \gamma_{ik}\Big[\log \pi_k + x_i \log \lambda_k - \lambda_k - \log x_i!\Big],\qquad \pi_3 = 1 - \pi_1 - \pi_2,\;}
+$$
+where $\gamma_{ik}$ is the **responsibility** of class $k$ for reef $i$, computed under the current parameters $\theta^0$ (so it is a fixed number when $Q$ is maximised over $\theta$).
+
+### (b) E-step
+
+By Bayes' theorem, with $\theta^0 = (\pi_1^0, \pi_2^0, \lambda_1^0, \lambda_2^0, \lambda_3^0)$ and $\pi_3^0 = 1 - \pi_1^0 - \pi_2^0$,
+$$
+\gamma_{ik} = P(Z_i = k \mid X_i = x_i, \theta^0)
+= \frac{P(Z_i = k \mid \theta^0)\,P(X_i = x_i \mid Z_i = k, \theta^0)}{\sum_{j=1}^{3} P(Z_i = j \mid \theta^0)\,P(X_i = x_i \mid Z_i = j, \theta^0)}
+= \frac{\pi_k^0 \,(\lambda_k^0)^{x_i} e^{-\lambda_k^0}}{\sum_{j=1}^{3} \pi_j^0\,(\lambda_j^0)^{x_i} e^{-\lambda_j^0}},
+$$
+for $k = 1, 2, 3$. The factor $1/x_i!$ is common to numerator and denominator and cancels.
+
+**Interpretation.** For a single reef, $\gamma_{i1}, \gamma_{i2}, \gamma_{i3}$ are the probabilities, given its observed count and the current parameter estimates, that it belonged to each management class. They sum to 1. A count near one class mean (and far from the others) gives a responsibility close to 1 for that class; a count lying between two class means splits its responsibility between them. Evaluated at the final MLE, these are exactly the per-reef classification confidences the client asked for.
+
+### (c) M-step
+
+$Q(\theta, \theta^0)$ is maximised over $\theta$ with the $\gamma_{ik}$ held fixed. Define the effective class sizes
+$$
+N_k = \sum_{i=1}^{n} \gamma_{ik}, \qquad N_1 + N_2 + N_3 = \sum_{i=1}^{n} \sum_{k=1}^{3} \gamma_{ik} = n.
+$$
+$Q$ separates into a part depending only on $(\pi_1,\pi_2)$ and parts each depending on a single $\lambda_k$:
+$$
+Q(\theta,\theta^0) = \underbrace{N_1 \log \pi_1 + N_2 \log \pi_2 + N_3 \log(1 - \pi_1 - \pi_2)}_{\text{mixing proportions}}
++ \sum_{k=1}^{3} \underbrace{\sum_{i=1}^{n} \gamma_{ik}\big(x_i \log \lambda_k - \lambda_k\big)}_{\text{class } k \text{ mean}} + \text{const}.
+$$
+
+**Updates for $\pi_1, \pi_2$ (handling the constraint).** The constraint $\pi_1 + \pi_2 + \pi_3 = 1$ is imposed by substituting $\pi_3 = 1 - \pi_1 - \pi_2$, so that $(\pi_1, \pi_2)$ are free parameters. Differentiating,
+$$
+\frac{\partial Q}{\partial \pi_1} = \frac{N_1}{\pi_1} - \frac{N_3}{1 - \pi_1 - \pi_2} = 0,
+\qquad
+\frac{\partial Q}{\partial \pi_2} = \frac{N_2}{\pi_2} - \frac{N_3}{1 - \pi_1 - \pi_2} = 0.
+$$
+Hence $\dfrac{N_1}{\pi_1} = \dfrac{N_2}{\pi_2} = \dfrac{N_3}{\pi_3} = c$ for some constant $c$, i.e. $\pi_k = N_k / c$. Summing over $k$ and using $\sum_k \pi_k = 1$ gives $c = N_1 + N_2 + N_3 = n$. Thus
+$$
+\boxed{\;\pi_1 = \frac{1}{n}\sum_{i=1}^{n} \gamma_{i1}, \qquad \pi_2 = \frac{1}{n}\sum_{i=1}^{n} \gamma_{i2}, \qquad \pi_3 = 1 - \pi_1 - \pi_2 = \frac{1}{n}\sum_{i=1}^{n}\gamma_{i3}.\;}
+$$
+This is a maximum: the function $\sum_k N_k \log \pi_k$ is strictly concave in $(\pi_1, \pi_2)$ on the open simplex (its Hessian is $-\operatorname{diag}(N_1/\pi_1^2, N_2/\pi_2^2) - (N_3/\pi_3^2)\mathbf{1}\mathbf{1}^\top$, which is negative definite), so the stationary point is the unique maximiser.
+
+(Equivalently, a Lagrange multiplier $\mu$ on $\sum_k \pi_k - 1$ gives $N_k/\pi_k = \mu$ and $\mu = n$, the same result.)
+
+**Updates for $\lambda_k$.** For each $k$,
+$$
+\frac{\partial Q}{\partial \lambda_k} = \sum_{i=1}^{n} \gamma_{ik}\left(\frac{x_i}{\lambda_k} - 1\right) = 0
+\quad\Longrightarrow\quad
+\boxed{\;\lambda_k = \frac{\sum_{i=1}^{n} \gamma_{ik}\, x_i}{\sum_{i=1}^{n} \gamma_{ik}}, \qquad k = 1, 2, 3.\;}
+$$
+The second derivative $-\sum_i \gamma_{ik} x_i / \lambda_k^2 < 0$, so this is a maximum.
+
+**Comment on the form.** The update for $\lambda_k$ is a **weighted average of the counts**, with each reef weighted by its responsibility for class $k$. It is the natural generalisation of the Poisson MLE $\hat\lambda = \bar{x}$: if the labels were known, $\gamma_{ik} \in \{0, 1\}$ and $\lambda_k$ would be the ordinary sample mean of the reefs in class $k$. Likewise $\pi_k$ is the average responsibility, i.e. the "soft" proportion of reefs assigned to class $k$.
+
+### (d) Implementation
+
+The incomplete (observed-data) log-likelihood, which EM should increase at every step, is
+$$
+\ell(\theta) = \sum_{i=1}^{n} \log\left( \sum_{k=1}^{3} \pi_k\, f(x_i; \lambda_k) \right).
+$$
+
+```{r}
+#| label: p1-em-functions
+
+# Incomplete (observed-data) log-likelihood of the 3-component Poisson mixture
+loglik_mix <- function(X, pi, lambda) {
+  dens <- sapply(1:3, function(k) pi[k] * dpois(X, lambda[k]))  # n x 3 matrix
+  sum(log(rowSums(dens)))
+}
+
+# EM algorithm for a 3-component Poisson mixture
+#   pi_init     : c(pi1, pi2); pi3 = 1 - pi1 - pi2
+#   lambda_init : c(lambda1, lambda2, lambda3)
+em_pois3 <- function(X, pi_init, lambda_init, max.iter = 100, eps = 1e-5) {
+  n      <- length(X)
+  pi     <- c(pi_init, 1 - sum(pi_init))
+  lambda <- lambda_init
+  ll     <- loglik_mix(X, pi, lambda)   # log-likelihood at the initial values
+  iter   <- 0
+
+  repeat {
+    iter <- iter + 1
+
+    # E-step: responsibilities gamma[i, k] = P(Z_i = k | x_i, theta^0)
+    num   <- sapply(1:3, function(k) pi[k] * dpois(X, lambda[k]))
+    gamma <- num / rowSums(num)
+
+    # M-step
+    Nk     <- colSums(gamma)            # effective class sizes
+    pi     <- Nk / n
+    lambda <- colSums(gamma * X) / Nk   # responsibility-weighted means
+
+    # Track incomplete log-likelihood and check stopping rule
+    ll <- c(ll, loglik_mix(X, pi, lambda))
+    if (abs(ll[iter + 1] - ll[iter]) < eps || iter >= max.iter) break
+  }
+
+  list(pi = pi, lambda = lambda, loglik = ll, iter = iter, gamma = gamma)
+}
+```
+
+The algorithm is run from two different sets of initial values, $(\pi_1,\pi_2,\lambda_1,\lambda_2,\lambda_3) = (0.3, 0.3, 3, 20, 35)$ and $(0.1, 0.2, 5, 25, 40)$, as a guard against local maxima. Iteration stops after 100 steps or when the log-likelihood changes by less than $10^{-5}$.
+
+```{r}
+#| label: p1-em-run
+
+fit1 <- em_pois3(X, pi_init = c(0.3, 0.3), lambda_init = c(3, 20, 35))
+fit2 <- em_pois3(X, pi_init = c(0.1, 0.2), lambda_init = c(5, 25, 40))
+
+runs <- data.frame(
+  run        = c("Initial values 1", "Initial values 2"),
+  iterations = c(fit1$iter, fit2$iter),
+  final_loglik = c(tail(fit1$loglik, 1), tail(fit2$loglik, 1)),
+  monotone   = c(all(diff(fit1$loglik) >= 0), all(diff(fit2$loglik) >= 0))
+)
+print(runs, digits = 10)
+```
+
+```{r}
+#| label: p1-plot-helper
+
+# Three diagnostic panels for one EM run:
+#  (i)   full log-likelihood trace from the initial values (iteration 0);
+#  (ii)  the same trace from iteration 1 onwards, so later increases are visible;
+#  (iii) the increase at each step, ell_t - ell_{t-1}, on a log scale.
+plot_ll <- function(fit, run_label) {
+  it  <- 0:fit$iter
+  inc <- diff(fit$loglik)
+  plot(it, fit$loglik, type = "b", pch = 19,
+       xlab = "EM iteration", ylab = "Incomplete log-likelihood",
+       main = paste0(run_label, ": full trace"))
+  plot(it[-1], fit$loglik[-1], type = "b", pch = 19,
+       xlab = "EM iteration", ylab = "Incomplete log-likelihood",
+       main = paste0(run_label, ": from iteration 1"))
+  plot(seq_along(inc), inc, type = "b", pch = 19, log = "y",
+       xlab = "EM iteration t", ylab = "Increase in log-likelihood (log scale)",
+       main = paste0(run_label, ": step increases"))
+  abline(h = 1e-5, lty = 2, col = "grey40")   # stopping tolerance
+}
+```
+
+```{r}
+#| label: fig-p1-loglik
+#| fig-cap: "EM convergence diagnostics for the three-component Poisson mixture (Model A). Top row: run from initial values (0.3, 0.3, 3, 20, 35). Bottom row: run from initial values (0.1, 0.2, 5, 25, 40). Left: incomplete log-likelihood from the initial values (iteration 0). Middle: the same trace from iteration 1, rescaled so that the later increases are visible. Right: the increase in log-likelihood at each EM step on a log scale; every point is positive, and the dashed line marks the stopping tolerance 0.00001."
+#| fig-width: 11
+#| fig-height: 7
+
+par(mfrow = c(2, 3))
+plot_ll(fit1, "Run 1")
+plot_ll(fit2, "Run 2")
+```
+
+```{r}
+#| label: p1-gain
+
+# Share of the total log-likelihood gain achieved in the first EM step
+gain1 <- function(fit) diff(fit$loglik)[1] / sum(diff(fit$loglik))
+round(c(run1 = gain1(fit1), run2 = gain1(fit2)), 3)
+```
+
+@fig-p1-loglik shows that the incomplete log-likelihood increases at every EM step in both runs, as EM theory guarantees. Because the first step dominates the left-hand panels, the middle panels replot from iteration 1, where the trace still rises at every step before levelling off. The right-hand panels show every step increase is strictly positive, and the `monotone` column above confirms this numerically. Almost all of the improvement comes from the first step (`r round(100 * gain1(fit1), 1)`% and `r round(100 * gain1(fit2), 1)`% of the total gain in runs 1 and 2). After that the increases shrink by a roughly constant factor at each step, appearing as a straight line on the log scale, which is the linear convergence typical of EM. Iteration stops once the increase falls below the tolerance.
+
+```{r}
+#| label: p1-select
+
+best <- if (tail(fit1$loglik, 1) >= tail(fit2$loglik, 1)) fit1 else fit2
+best_name <- if (identical(best, fit1)) "Initial values 1" else
+  "Initial values 2"
+best_name
+
+est <- data.frame(
+  class  = 1:3,
+  pi     = round(best$pi, 3),
+  lambda = round(best$lambda, 2)
+)
+est
+```
+
+Both runs converge to essentially the same solution (their final log-likelihoods agree to within about $10^{-5}$), which gives some reassurance that this is the global maximum rather than a local one. The reported estimates come from the run with the higher incomplete log-likelihood, `r best_name`, which stopped after `r best$iter` iterations with $\ell(\hat\theta) =$ `r round(tail(best$loglik, 1), 3)`.
+
+**Final estimates.**
+
+| Class | $\hat\pi_k$ | $\hat\lambda_k$ |
+|---|---|---|
+| 1 | `r sprintf("%.3f", best$pi[1])` | `r sprintf("%.2f", best$lambda[1])` |
+| 2 | `r sprintf("%.3f", best$pi[2])` | `r sprintf("%.2f", best$lambda[2])` |
+| 3 | `r sprintf("%.3f", best$pi[3])` | `r sprintf("%.2f", best$lambda[3])` |
+
+In terms of the client's questions: roughly 29% of reefs fall into a low-abundance class with a typical seasonal count of about 6 coral trout, about 29% into an intermediate class with a typical count of about 20, and about 42% into a high-abundance class with a typical count of about 38. Given the biological expectation that fishing pressure lowers abundance, the low class is plausibly the most heavily fished and the high class the no-take zones, though the model itself only identifies the groups by their means, not by management regime. Since the data are simulated, these are statements about the fitted model, not findings about the real Great Barrier Reef.
+
+**Model check.** @fig-p1-fit overlays the fitted mixture probability mass function on the observed counts. The fitted mixture reproduces the three modes and their relative heights reasonably well, so the three-component Poisson mixture appears consistent with the data.
+
+```{r}
+#| label: fig-p1-fit
+#| fig-cap: "Observed distribution of the 300 counts (grey bars, relative frequency) with the fitted three-component Poisson mixture pmf overlaid (black line) and its weighted components (coloured dashed lines)."
+#| fig-width: 8
+#| fig-height: 4.5
+
+xs   <- 0:max(X)
+comp <- sapply(1:3, function(k) best$pi[k] * dpois(xs, best$lambda[k]))
+obs  <- table(factor(X, levels = xs)) / length(X)
+
+plot(xs, as.numeric(obs), type = "h", lwd = 4, col = "grey70",
+     xlab = "Seasonal coral trout count",
+     ylab = "Probability / relative frequency",
+     ylim = c(0, max(obs, rowSums(comp))),
+     main = "Fitted Poisson mixture vs observed counts")
+lines(xs, rowSums(comp), lwd = 2)
+matlines(xs, comp, lty = 2, lwd = 1.5,
+         col = c("firebrick", "darkorange", "steelblue"))
+legend("topright", bty = "n",
+       legend = c("Observed", "Fitted mixture",
+                  "Class 1", "Class 2", "Class 3"),
+       col = c("grey70", "black", "firebrick", "darkorange", "steelblue"),
+       lty = c(1, 1, 2, 2, 2), lwd = c(4, 2, 1.5, 1.5, 1.5))
+```
+
+**Per-reef classification confidence.** The responsibilities at the MLE give, for each reef, the posterior probability of each class. The table below shows a few examples, illustrating that reefs with counts near a class mean are classified with high confidence, while counts lying between two class means (for example around 12–14 or 27–30) are classified with noticeably less certainty.
+
+```{r}
+#| label: p1-responsibilities
+
+ex <- sapply(c(3, 13, 20, 29, 45), function(v) which(X == v)[1])
+resp <- data.frame(reef = ex, count = X[ex], round(best$gamma[ex, ], 3))
+names(resp)[3:5] <- c("P(class 1)", "P(class 2)", "P(class 3)")
+resp
+
+# Share of reefs whose most probable class has posterior probability > 0.9
+mean(apply(best$gamma, 1, max) > 0.9)
+```
+
+This answers the client's question about confidence directly: `r round(100 * mean(apply(best$gamma, 1, max) > 0.9))`% of the 300 reefs are assigned to a single class with posterior probability above 0.9. The remaining reefs, mostly those with counts between two class means, cannot be classified confidently from their count alone, and any reporting split that depends on them should carry that uncertainty.
+
+## Model B: archive plus labelled backup
+
+The 100 labelled class-2 counts (@fig-load-data, right) are centred near 20, which lines up with the middle cluster of the archive counts (@fig-load-data, left).
+
+### (a) Expected complete log-likelihood
+
+As before, $\pi_3 = 1 - \pi_1 - \pi_2$ and $f(x;\lambda) = \lambda^x e^{-\lambda}/x!$. Write $n = 300$ for the unlabelled counts and $m = 100$ for the labelled counts, indexed $i = n+1, \ldots, n+m$.
+
+**Complete-data likelihood.** By independence, the joint probability factorises into an unlabelled part (which involves the latent $Z_i$, exactly as in Model A) and a labelled part (which involves no latent variable, because these reefs are known to be in class 2):
+$$
+P(X, Z \mid \theta)
+= \underbrace{\prod_{i=1}^{300} \prod_{k=1}^{3} \big[\pi_k\, f(x_i;\lambda_k)\big]^{\mathbb{1}(Z_i = k)}}_{\text{unlabelled, } i = 1,\ldots,300}
+\;\times\;
+\underbrace{\prod_{i=301}^{400} f(x_i;\lambda_2)}_{\text{labelled, } i = 301,\ldots,400}.
+$$
+Note that the labelled reefs contribute $f(x_i;\lambda_2)$ and **not** $\pi_2 f(x_i;\lambda_2)$: their class is fixed by how they were recovered (the backup only contained class-2 reefs), not drawn from the categorical distribution, so they carry no information about the mixing proportions.
+
+**Complete log-likelihood.**
+$$
+\log P(X, Z \mid \theta) = \sum_{i=1}^{300} \sum_{k=1}^{3} \mathbb{1}(Z_i = k)\Big[\log \pi_k + x_i \log \lambda_k - \lambda_k - \log x_i!\Big]
++ \sum_{i=301}^{400} \Big[x_i \log \lambda_2 - \lambda_2 - \log x_i!\Big].
+$$
+
+**Expectation over $Z \mid X, \theta^0$.** The second sum does not involve $Z$, so its expectation is itself. In the first sum, by the same argument as Model A, part (a), $E_{Z\mid X,\theta^0}[\mathbb{1}(Z_i = k)] = P(Z_i = k \mid X_i = x_i, \theta^0) = \gamma_{ik}$ for $i = 1, \ldots, 300$. (The labelled counts are independent of $Z_1,\ldots,Z_{300}$, so conditioning on them does not change these posterior probabilities.) Hence
+$$
+\boxed{\;Q(\theta, \theta^0) = \sum_{i=1}^{300} \sum_{k=1}^{3} \gamma_{ik}\Big[\log \pi_k + x_i \log \lambda_k - \lambda_k - \log x_i!\Big]
++ \sum_{i=301}^{400} \Big[x_i \log \lambda_2 - \lambda_2 - \log x_i!\Big].\;}
+$$
+The first term is exactly the Model A $Q$-function; the second is the ordinary Poisson log-likelihood of the labelled counts under $\lambda_2$.
+
+### (b) E-step and M-step
+
+**E-step.** Only the unlabelled reefs have latent labels. For $i = 1, \ldots, 300$ and $k = 1, 2, 3$, Bayes' theorem gives, exactly as in Model A, part (b),
+$$
+\gamma_{ik} = P(Z_i = k \mid X_i = x_i, \theta^0) = \frac{\pi_k^0\,(\lambda_k^0)^{x_i} e^{-\lambda_k^0}}{\sum_{j=1}^{3} \pi_j^0\,(\lambda_j^0)^{x_i} e^{-\lambda_j^0}}.
+$$
+No responsibilities are computed for $i = 301, \ldots, 400$; their class is known (equivalently, $\gamma_{i2} = 1$ and $\gamma_{i1} = \gamma_{i3} = 0$ for those reefs).
+
+**M-step.** Let $N_k = \sum_{i=1}^{300} \gamma_{ik}$, so $N_1 + N_2 + N_3 = 300$. Up to constants,
+$$
+Q(\theta,\theta^0) = \sum_{k=1}^{3} N_k \log \pi_k
++ \sum_{i=1}^{300} \gamma_{i1}(x_i \log\lambda_1 - \lambda_1)
++ \Big[\sum_{i=1}^{300} \gamma_{i2}(x_i \log\lambda_2 - \lambda_2) + \sum_{i=301}^{400}(x_i\log\lambda_2 - \lambda_2)\Big]
++ \sum_{i=1}^{300} \gamma_{i3}(x_i \log\lambda_3 - \lambda_3),
+$$
+which again separates into one block per parameter group.
+
+*Mixing proportions (unchanged).* The labelled term does not involve $\pi_1, \pi_2$, so the $\pi$-block of $Q$ is identical to Model A. Substituting $\pi_3 = 1 - \pi_1 - \pi_2$ and setting $\partial Q/\partial\pi_1 = \partial Q/\partial\pi_2 = 0$ gives $N_1/\pi_1 = N_2/\pi_2 = N_3/\pi_3 = c$, and $\sum_k \pi_k = 1$ gives $c = N_1 + N_2 + N_3 = 300$. So
+$$
+\boxed{\;\pi_k = \frac{1}{300}\sum_{i=1}^{300} \gamma_{ik}, \quad k = 1,2,\qquad \pi_3 = 1 - \pi_1 - \pi_2.\;}
+$$
+The denominator is 300, not 400: the 100 labelled reefs were not sampled from the mixture, so they say nothing about how common each class is in the archive.
+
+*$\lambda_1$ and $\lambda_3$ (unchanged).* The labelled term does not involve $\lambda_1$ or $\lambda_3$, so their blocks of $Q$ are identical to Model A and
+$$
+\boxed{\;\lambda_k = \frac{\sum_{i=1}^{300} \gamma_{ik}\,x_i}{\sum_{i=1}^{300} \gamma_{ik}}, \qquad k = 1, 3.\;}
+$$
+
+*$\lambda_2$ (changed).* Differentiating the $\lambda_2$-block,
+$$
+\frac{\partial Q}{\partial \lambda_2} = \sum_{i=1}^{300} \gamma_{i2}\left(\frac{x_i}{\lambda_2} - 1\right) + \sum_{i=301}^{400}\left(\frac{x_i}{\lambda_2} - 1\right) = 0
+\quad\Longrightarrow\quad
+\boxed{\;\lambda_2 = \frac{\sum_{i=1}^{300} \gamma_{i2}\,x_i + \sum_{i=301}^{400} x_i}{\sum_{i=1}^{300} \gamma_{i2} + 100}.\;}
+$$
+The second derivative, $-\big(\sum_{i\le 300}\gamma_{i2}x_i + \sum_{i>300} x_i\big)/\lambda_2^2$, is negative, so this is a maximum (and the $\pi$, $\lambda_1$, $\lambda_3$ updates are maxima for the same reasons as in Model A, part (c)).
+
+This is still a weighted mean of counts: each unlabelled reef enters with weight $\gamma_{i2}$ and each labelled reef with weight 1, since it is known with certainty to be in class 2. The labelled data therefore anchor $\lambda_2$, and through the E-step they also indirectly affect the responsibilities and hence the other estimates.
+
+### (c) Implementation
+
+The incomplete (observed-data) log-likelihood for this model is the Model A mixture log-likelihood for the unlabelled counts plus the Poisson log-likelihood of the labelled counts under $\lambda_2$:
+$$
+\ell(\theta) = \sum_{i=1}^{300} \log\left(\sum_{k=1}^{3} \pi_k\, f(x_i;\lambda_k)\right) + \sum_{i=301}^{400} \log f(x_i;\lambda_2).
+$$
+This is the quantity monitored for the stopping rule and plotted below. The implementation reuses `loglik_mix()` from Model A.
+
+```{r}
+#| label: p2-em-functions
+
+# Incomplete log-likelihood for the combined model
+loglik_comb <- function(X, X0, pi, lambda) {
+  loglik_mix(X, pi, lambda) + sum(dpois(X0, lambda[2], log = TRUE))
+}
+
+# EM for the 3-component Poisson mixture with extra labelled class-2 data X0
+em_pois3_lab <- function(X, X0, pi_init, lambda_init,
+                         max.iter = 100, eps = 1e-5) {
+  n      <- length(X)
+  m      <- length(X0)
+  pi     <- c(pi_init, 1 - sum(pi_init))
+  lambda <- lambda_init
+  ll     <- loglik_comb(X, X0, pi, lambda)
+  iter   <- 0
+
+  repeat {
+    iter <- iter + 1
+
+    # E-step: responsibilities for the unlabelled counts only
+    num   <- sapply(1:3, function(k) pi[k] * dpois(X, lambda[k]))
+    gamma <- num / rowSums(num)
+
+    # M-step
+    Nk     <- colSums(gamma)
+    pi     <- Nk / n                                # denominator 300, not 400
+    lambda <- colSums(gamma * X) / Nk               # lambda1, lambda3 as before
+    # lambda2 also uses the labelled data
+    lambda[2] <- (sum(gamma[, 2] * X) + sum(X0)) / (Nk[2] + m)
+
+    ll <- c(ll, loglik_comb(X, X0, pi, lambda))
+    if (abs(ll[iter + 1] - ll[iter]) < eps || iter >= max.iter) break
+  }
+
+  list(pi = pi, lambda = lambda, loglik = ll, iter = iter, gamma = gamma)
+}
+```
+
+```{r}
+#| label: p2-em-run
+
+fitA <- em_pois3_lab(X, X0, pi_init = c(0.3, 0.3), lambda_init = c(3, 20, 35))
+fitB <- em_pois3_lab(X, X0, pi_init = c(0.1, 0.2), lambda_init = c(5, 25, 40))
+
+runs2 <- data.frame(
+  run          = c("Initial values 1", "Initial values 2"),
+  iterations   = c(fitA$iter, fitB$iter),
+  final_loglik = c(tail(fitA$loglik, 1), tail(fitB$loglik, 1)),
+  monotone     = c(all(diff(fitA$loglik) >= 0), all(diff(fitB$loglik) >= 0))
+)
+print(runs2, digits = 10)
+```
+
+```{r}
+#| label: fig-p2-loglik
+#| fig-cap: "EM convergence diagnostics for the combined model (Model B). Top row: run from initial values (0.3, 0.3, 3, 20, 35). Bottom row: run from initial values (0.1, 0.2, 5, 25, 40). Left: incomplete log-likelihood from the initial values (iteration 0). Middle: the same trace from iteration 1, rescaled so that the later increases are visible. Right: the increase in log-likelihood at each EM step on a log scale; every point is positive, and the dashed line marks the stopping tolerance 0.00001."
+#| fig-width: 11
+#| fig-height: 7
+
+par(mfrow = c(2, 3))
+plot_ll(fitA, "Run 1")
+plot_ll(fitB, "Run 2")
+```
+
+@fig-p2-loglik, which uses the same diagnostic panels as Model A, shows that the incomplete log-likelihood increases at every EM step in both runs. The middle panels show the rise continuing after the first step, and the right-hand panels show that every step increase is strictly positive. The `monotone` column confirms that no step decreased it. As in Model A, almost all of the gain comes in the first step (`r round(100 * gain1(fitA), 1)`% and `r round(100 * gain1(fitB), 1)`%), after which convergence is linear. These values are not comparable with those in @fig-p1-loglik, because the log-likelihood now also includes the 100 labelled counts.
+
+```{r}
+#| label: p2-select
+
+best2 <- if (tail(fitA$loglik, 1) >= tail(fitB$loglik, 1)) fitA else fitB
+best2_name <- if (identical(best2, fitA)) "Initial values 1" else
+  "Initial values 2"
+best2_name
+data.frame(class = 1:3, pi = round(best2$pi, 3),
+           lambda = round(best2$lambda, 2))
+```
+
+Both runs again converge to the same solution. The run with the higher incomplete log-likelihood is `r best2_name`, which stopped after `r best2$iter` iterations with $\ell(\hat\theta) =$ `r round(tail(best2$loglik, 1), 3)`.
+
+**Final estimates (combined model).**
+
+| Class | $\hat\pi_k$ | $\hat\lambda_k$ |
+|---|---|---|
+| 1 | `r sprintf("%.3f", best2$pi[1])` | `r sprintf("%.2f", best2$lambda[1])` |
+| 2 | `r sprintf("%.3f", best2$pi[2])` | `r sprintf("%.2f", best2$lambda[2])` |
+| 3 | `r sprintf("%.3f", best2$pi[3])` | `r sprintf("%.2f", best2$lambda[3])` |
+
+**Comparison with Model A.** The table below sets the two sets of estimates side by side.
+
+```{r}
+#| label: p2-compare
+
+comp_tab <- data.frame(
+  parameter   = c("pi1", "pi2", "pi3", "lambda1", "lambda2", "lambda3"),
+  model_A    = round(c(best$pi, best$lambda), 3),
+  model_B    = round(c(best2$pi, best2$lambda), 3)
+)
+comp_tab$difference <- round(comp_tab$model_B - comp_tab$model_A, 3)
+comp_tab
+```
+
+The mixing proportions and $\lambda_1$, $\lambda_3$ change very little. The largest change is in $\hat\lambda_2$, which falls from `r round(best$lambda[2], 2)` to `r round(best2$lambda[2], 2)`, pulled towards the labelled-data mean of `r round(mean(X0), 2)`. The labelled data are broadly consistent with the class-2 component recovered from the archive alone (a difference of under one count), so they refine rather than contradict the Model A picture. A second benefit is precision: $\lambda_2$ is now estimated from the equivalent of about `r round(sum(best2$gamma[, 2]) + length(X0))` class-2 reefs rather than about `r round(sum(best$gamma[, 2]))`, which should reduce its uncertainty. A rough standard error, treating the effective class size $N$ as fixed, is $\sqrt{\hat\lambda_2 / N}$:
+
+```{r}
+#| label: p2-se
+
+N_p1 <- sum(best$gamma[, 2])                    # Model A: unlabelled only
+N_p2 <- sum(best2$gamma[, 2]) + length(X0)      # Model B: plus labelled reefs
+se_lambda2 <- c(model_A = sqrt(best$lambda[2] / N_p1),
+                model_B = sqrt(best2$lambda[2] / N_p2))
+round(se_lambda2, 2)
+```
+
+The approximate standard error of $\hat\lambda_2$ falls from about `r sprintf("%.2f", se_lambda2[1])` to about `r sprintf("%.2f", se_lambda2[2])`. This approximation ignores uncertainty in class membership, so both values understate the true standard error, but the comparison still shows that the labelled data make $\hat\lambda_2$ substantially more precise. The mixing proportions are still estimated from the 300 archive reefs only, as they should be.
+
+
+## References
+
+Australian Institute of Marine Science. *AIMS Long-Term Monitoring Program: visual census fish data.* <https://apps.aims.gov.au/metadata/view/5be0b340-4ade-11dc-8f56-00008a07204e>
+
+R Core Team (`r R.version$year`). *R: A Language and Environment for Statistical Computing* (version `r getRversion()`). <https://www.R-project.org/>. All EM code was written in base R; no mixture-model packages were used.
+
+Wickham, H. (2016). *ggplot2: Elegant Graphics for Data Analysis.* Springer.
