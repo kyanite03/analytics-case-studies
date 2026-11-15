@@ -17,6 +17,6 @@
 **Limitations**
 - The data are simulated and the model is low-dimensional and conjugate, which is ideal for validation but easier than real problems
 
-**Full report**: [PDF](report.pdf) · [HTML](report.html)
+**Full report**: [PDF](report.pdf) · [Read online](https://kyanite03.github.io/analytics-case-studies/06-bayesian-inference-methods/report.html)
 **Tools**: R (base) · Quarto
 **Reproduce**: `quarto render analysis.qmd` (data not redistributed, see [data note](data/README.md))

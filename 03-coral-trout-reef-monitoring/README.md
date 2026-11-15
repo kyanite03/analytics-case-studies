@@ -20,6 +20,6 @@
 - A negative-binomial model is a natural sensitivity check
 - Part II uses simulated data
 
-**Full report**: [PDF](report.pdf) · [HTML](report.html)
+**Full report**: [PDF](report.pdf) · [Read online](https://kyanite03.github.io/analytics-case-studies/03-coral-trout-reef-monitoring/report.html)
 **Tools**: R · ggplot2 · Quarto
 **Reproduce**: `quarto render analysis.qmd` (Part I data included; Part II data see [data note](data/README.md))

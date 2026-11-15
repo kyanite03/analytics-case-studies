@@ -18,6 +18,6 @@
 - k-means on raw returns gives volatile stocks and days more weight
 - The results come from a single historical window, so cluster stability isn't tested
 
-**Full report**: [PDF](report.pdf) · [HTML](report.html)
+**Full report**: [PDF](report.pdf) · [Read online](https://kyanite03.github.io/analytics-case-studies/04-equity-return-clustering/report.html)
 **Tools**: R (base) · Quarto
 **Reproduce**: `quarto render analysis.qmd` (data not redistributed, see [data note](data/README.md))

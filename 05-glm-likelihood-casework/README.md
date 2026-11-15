@@ -18,6 +18,6 @@
 - Grouped historical records describe associations, not individual causes
 - The single-predictor penguin model omits species
 
-**Full report**: [PDF](report.pdf) · [HTML](report.html)
+**Full report**: [PDF](report.pdf) · [Read online](https://kyanite03.github.io/analytics-case-studies/05-glm-likelihood-casework/report.html)
 **Tools**: R · Quarto · palmerpenguins
 **Reproduce**: `quarto render analysis.qmd`

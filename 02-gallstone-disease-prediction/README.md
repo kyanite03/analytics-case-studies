@@ -20,6 +20,6 @@
 - Only about 40 patients had comorbidities, which limits analysis of their role
 - Correlation filtering and outlier removal were applied before the train/test split, which could slightly inflate the hold-out estimate
 
-**Full report**: [PDF](report.pdf) · [HTML](report.html) · [notebook](analysis.ipynb)
+**Full report**: [PDF](report.pdf) · [Read online](https://kyanite03.github.io/analytics-case-studies/02-gallstone-disease-prediction/report.html) · [notebook](analysis.ipynb)
 **Tools**: Python · pandas · scikit-learn · XGBoost · statsmodels · seaborn
 **Reproduce**: `pip install pandas scikit-learn xgboost statsmodels seaborn openpyxl`, then run `analysis.ipynb` (data in `data/`, see [data note](data/README.md))
