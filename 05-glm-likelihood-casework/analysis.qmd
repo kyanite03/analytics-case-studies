@@ -1,0 +1,575 @@
+---
+title: "Likelihood and GLM Casework"
+subtitle: "Probit regression from first principles, logistic regression, and exponential-family theory"
+author: "Kai Marsh"
+format:
+  html:
+    output-file: report.html
+    toc: true
+    toc-depth: 2
+    number-sections: false
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    code-summary: "Show code"
+  pdf:
+    output-file: report.pdf
+    toc: true
+    number-sections: false
+    geometry: margin=2.2cm
+    pdf-engine: xelatex
+    fig-pos: "H"
+    echo: false
+execute:
+  echo: true
+---
+
+::: {.callout-note title="About this report"}
+Three short client-style briefs. Each is written for a non-technical decision-maker and also includes the full mathematics and R code for a technical reviewer. In Case 1 the probit model is fitted **without** `glm()`: the likelihood, optimiser, Fisher information, confidence intervals and likelihood-ratio test are all built by hand. The work was originally done as coursework for a university statistics course (University of Melbourne, 2026).
+:::
+
+::: {.callout-tip title="Key findings"}
+- **Titanic, third class:** an adult female had an estimated **44.6% chance of survival (95% CI 37.5%–51.9%)**. Sex was strongly associated with survival after accounting for age group (likelihood-ratio statistic 55.9 on 1 df, p ≈ 7.6 × 10⁻¹⁴).
+- **Penguins:** each extra 500 g of body mass multiplies the odds of a male record by **1.86 (95% CI 1.57–2.20)**. Species is a likely confounder, so this is a descriptive association.
+- **Method:** the probit model is estimated entirely by hand (log-likelihood, numerical optimisation, analytic Fisher information and LRT), and the results are checked against standard theory.
+:::
+
+```{r}
+#| label: setup
+#| message: false
+library(palmerpenguins)
+par_default <- par(no.readonly = TRUE)
+options(scipen = 6, digits = 6)
+```
+
+# Case 1: Titanic third-class survival (probit regression from first principles)
+
+**Brief.** A maritime research organisation is preparing an exhibition on survival on the Titanic and wants a transparent analysis of how **sex** and **age group** were associated with survival among **third-class** passengers. Because the subject is historically sensitive, the analysis separates statistical association from explanations of individual behaviour or evacuation policy. The manager's headline question: *what survival probability does the model estimate for a third-class adult female, and how certain is it?*
+
+**Data and model.** The data are R's built-in `Titanic` table (2,201 people, from British Board of Trade records), restricted to third class. For group $i$, let $Y_i$ be the number of survivors out of $m_i$ people, and
+$$
+Y_i\sim\operatorname{Binomial}(m_i,p_i),\qquad \Phi^{-1}(p_i)=\beta_0+\beta_1\texttt{female}_i+\beta_2\texttt{adult}_i .
+$$
+The model is fitted from first principles with `optim()`, without using `glm()`.
+
+## (a) Maximum likelihood estimation
+
+**Data preparation**
+
+```{r}
+#| label: q1-data-prep
+#| echo: true
+
+data(Titanic)
+titanic_long <- as.data.frame(Titanic)
+titanic_grouped <- reshape(
+  titanic_long,
+  idvar = c("Class", "Sex", "Age"),
+  timevar = "Survived",
+  direction = "wide"
+)
+titanic_grouped$Total <-
+  titanic_grouped$Freq.No + titanic_grouped$Freq.Yes
+titanic_grouped <- subset(
+  titanic_grouped,
+  Class == "3rd" & Total > 0
+)
+titanic_grouped$female <- as.integer(titanic_grouped$Sex == "Female")
+titanic_grouped$adult <- as.integer(titanic_grouped$Age == "Adult")
+str(titanic_grouped)
+titanic_grouped
+```
+
+After grouping, third class reduces to four sex-by-age-group cells: male children, female children, male adults, and female adults. This is the grouped-binomial data used throughout this analysis.
+
+**Derivation of the log-likelihood**
+
+Write $\eta_i=\beta_0+\beta_1\texttt{female}_i+\beta_2\texttt{adult}_i$ for the linear predictor of group $i$, and $p_i=\Phi(\eta_i)$ under the probit link, where $\Phi$ is the standard normal cumulative distribution function. The four groups are independent, and within group $i$,
+$$
+Y_i \sim \operatorname{Binomial}(m_i,p_i),
+\qquad
+\Pr(Y_i=y_i)=\binom{m_i}{y_i}p_i^{y_i}(1-p_i)^{m_i-y_i}.
+$$
+The full likelihood is the product over the four independent groups, so the log-likelihood is
+$$
+\ell(\beta_0,\beta_1,\beta_2)
+=\sum_{i=1}^{4}\Big[y_i\log p_i+(m_i-y_i)\log(1-p_i)\Big]
++\sum_{i=1}^{4}\log\binom{m_i}{y_i}.
+$$
+The second sum contains no $\beta$ terms, so up to an additive constant that does not affect the location of the maximum,
+$$
+\ell(\beta)\;\propto\;\sum_{i=1}^{4}\Big[y_i\log\Phi(\eta_i)+(m_i-y_i)\log\big(1-\Phi(\eta_i)\big)\Big],
+\qquad \eta_i=\beta_0+\beta_1\texttt{female}_i+\beta_2\texttt{adult}_i .
+$$
+This is the objective function maximised below (as a *negative* log-likelihood, since `optim()` minimises by default).
+
+**R implementation and optimisation**
+
+```{r}
+#| label: q1-mle
+#| echo: true
+
+y <- titanic_grouped$Freq.Yes
+m <- titanic_grouped$Total
+X <- cbind(1, titanic_grouped$female, titanic_grouped$adult)
+colnames(X) <- c("(Intercept)", "female", "adult")
+
+# negative log-likelihood, up to an additive constant (log-binomial-coefficient
+# term is dropped, as it does not depend on beta)
+neg_loglik <- function(beta, y, m, X) {
+  eta <- as.vector(X %*% beta)
+  p <- pnorm(eta)
+  p <- pmin(pmax(p, 1e-12), 1 - 1e-12)  # guard against log(0)
+  ll <- sum(y * log(p) + (m - y) * log(1 - p))
+  -ll
+}
+
+fit1 <- optim(
+  par = c(0, 0, 0), fn = neg_loglik, y = y, m = m, X = X,
+  method = "BFGS", hessian = TRUE,
+  control = list(reltol = 1e-12, maxit = 5000)
+)
+fit1$convergence
+fit1$message
+beta_hat <- fit1$par
+names(beta_hat) <- colnames(X)
+beta_hat
+
+# re-run from a very different starting point as a convergence check
+fit1_alt <- optim(
+  par = c(1, -1, 1), fn = neg_loglik, y = y, m = m, X = X,
+  method = "BFGS", hessian = TRUE,
+  control = list(reltol = 1e-12, maxit = 5000)
+)
+fit1_alt$convergence
+fit1_alt$par
+max(abs(fit1_alt$par - fit1$par))
+```
+
+**Checking convergence.** `optim()` reports `convergence = 0`, which indicates that the BFGS algorithm's internal criteria were satisfied (a value other than 0 signals a problem, such as reaching the iteration limit). As a further check, the optimisation was re-run from a distant starting point, $(\beta_0,\beta_1,\beta_2)=(1,-1,1)$; the two runs agree to at least seven decimal places, which is strong evidence that the optimiser has located the global maximum of this smooth, well-behaved likelihood surface rather than a local artefact of the starting values.
+
+**Maximum likelihood estimates.** The MLEs (to 4 decimal places) are
+$$
+\hat\beta_0=`r round(beta_hat[1],4)`,\qquad
+\hat\beta_1(\texttt{female})=`r round(beta_hat[2],4)`,\qquad
+\hat\beta_2(\texttt{adult})=`r round(beta_hat[3],4)` .
+$$
+
+**Plain-language summary.** All three quantities are on the probit ("z-score") scale, not probabilities directly. The positive `female` coefficient means that, holding age group fixed, being recorded as female is associated with a higher estimated chance of survival than being recorded as male. The negative `adult` coefficient means that, holding sex fixed, being recorded as an adult is associated with a lower estimated chance of survival than being recorded as a child. Part (d) below converts these into an actual survival probability for a specific group.
+
+## (b) Fisher information and confidence intervals
+
+**Deriving the Fisher information matrix**
+
+The score (gradient of the log-likelihood) with respect to $\eta_i$ for a single group is obtained by the chain rule, using $p_i=\Phi(\eta_i)$ and $\dfrac{dp_i}{d\eta_i}=\phi(\eta_i)$, the standard normal density:
+$$
+\frac{\partial \ell_i}{\partial \eta_i}
+=\left(\frac{y_i}{p_i}-\frac{m_i-y_i}{1-p_i}\right)\phi(\eta_i).
+$$
+To obtain the (expected) Fisher information we differentiate once more and take expectations. Working first in terms of $p_i$,
+$$
+\frac{\partial \ell_i}{\partial p_i}=\frac{y_i}{p_i}-\frac{m_i-y_i}{1-p_i},
+\qquad
+\frac{\partial^2 \ell_i}{\partial p_i^2}=-\frac{y_i}{p_i^2}-\frac{m_i-y_i}{(1-p_i)^2}.
+$$
+Since $E(Y_i)=m_ip_i$,
+$$
+E\!\left(\frac{\partial^2 \ell_i}{\partial p_i^2}\right)
+=-\frac{m_ip_i}{p_i^2}-\frac{m_i(1-p_i)}{(1-p_i)^2}
+=-\frac{m_i}{p_i(1-p_i)} .
+$$
+By the chain rule, and because $E(\partial \ell_i/\partial p_i)=0$ (a standard score identity, easily checked directly here), the cross term vanishes on taking expectations, leaving
+$$
+E\!\left(\frac{\partial^2 \ell_i}{\partial \eta_i^2}\right)
+=E\!\left(\frac{\partial^2 \ell_i}{\partial p_i^2}\right)\left(\frac{dp_i}{d\eta_i}\right)^2
+=-\frac{m_i\,\phi(\eta_i)^2}{p_i(1-p_i)} .
+$$
+Because $\eta_i=x_i^\top\beta$ is linear in $\beta$ (with $x_i=(1,\texttt{female}_i,\texttt{adult}_i)^\top$), the chain rule gives $\dfrac{\partial^2 \ell}{\partial\beta\,\partial\beta^\top}=\sum_i x_ix_i^\top\dfrac{\partial^2 \ell_i}{\partial \eta_i^2}$, so the **expected Fisher information matrix** is
+$$
+\mathcal I(\beta)=-E\!\left(\frac{\partial^2 \ell}{\partial\beta\,\partial\beta^\top}\right)
+=\sum_{i=1}^{4} w_i\,x_i x_i^\top = X^\top W X,
+\qquad
+w_i=\frac{m_i\,\phi(\eta_i)^2}{p_i(1-p_i)} .
+$$
+Under standard maximum-likelihood asymptotics, $\widehat\beta \overset{\cdot}{\sim} N\!\big(\beta,\, \mathcal I(\hat\beta)^{-1}\big)$, so the estimated variance-covariance matrix is $\widehat{\operatorname{Var}}(\hat\beta)=\mathcal I(\hat\beta)^{-1}$, and 95% Wald confidence intervals are $\hat\beta_j \pm 1.96\,\mathrm{SE}(\hat\beta_j)$.
+
+**Evaluating the Fisher information in R**
+
+```{r}
+#| label: q1-fisher
+#| echo: true
+
+fisher_info <- function(beta, m, X) {
+  eta <- as.vector(X %*% beta)
+  p <- pnorm(eta)
+  w <- m * dnorm(eta)^2 / (p * (1 - p))
+  t(X) %*% (X * w)   # X^T W X
+}
+
+I_hat <- fisher_info(beta_hat, m, X)
+I_hat
+
+vcov_analytic <- solve(I_hat)
+vcov_analytic
+
+se_analytic <- sqrt(diag(vcov_analytic))
+se_analytic
+```
+
+As a numerical cross-check, `optim(..., hessian = TRUE)` returns a finite-difference approximation to the *observed* information (the Hessian of the negative log-likelihood evaluated at $\hat\beta$). The two versions of the information matrix agree closely but not exactly, and the residual gap is not numerical noise: differentiating $\partial \ell_i/\partial\eta_i$ once more without taking an expectation leaves an extra term,
+$$
+\frac{\partial^2 \ell_i}{\partial \eta_i^2}
+=-\eta_i\,\phi(\eta_i)\left(\frac{y_i}{p_i}-\frac{m_i-y_i}{1-p_i}\right)-\frac{m_i\,\phi(\eta_i)^2}{p_i(1-p_i)},
+$$
+whose first term has expectation zero (since $E(y_i)=m_ip_i$) but need not be exactly zero for the realised counts $y_i$. This term is the reason observed information differs from expected information here: the probit link is *non-canonical* for the binomial family, so the second derivative of the log-likelihood genuinely depends on $y_i$, not only on $m_i$ and $\eta_i$. (Had we used the canonical, logit, link, this $y_i$-dependent term would not appear at all, and observed and expected information would coincide exactly at any $\beta$, not just approximately at the MLE.) So the small discrepancy below reflects this real feature of the probit model, not rounding or optimiser imprecision:
+
+```{r}
+#| label: q1-fisher-check
+#| echo: true
+
+vcov_numeric <- solve(fit1$hessian)
+se_numeric <- sqrt(diag(vcov_numeric))
+rbind(analytic = se_analytic, numeric_hessian = se_numeric)
+```
+
+**95% confidence intervals**
+
+```{r}
+#| label: q1-cis
+#| echo: true
+
+z975 <- qnorm(0.975)
+ci_lower <- beta_hat - z975 * se_analytic
+ci_upper <- beta_hat + z975 * se_analytic
+q1_ci_table <- data.frame(
+  parameter = names(beta_hat),
+  estimate = round(beta_hat, 4),
+  se = round(se_analytic, 4),
+  ci_lower = round(ci_lower, 4),
+  ci_upper = round(ci_upper, 4)
+)
+q1_ci_table
+```
+
+**Table 1.** Maximum likelihood estimates, standard errors, and 95% Wald confidence intervals for the third-class probit survival model.
+
+**Plain-language summary.** The `female` effect ($\hat\beta_1\approx `r round(beta_hat[2],2)`$, 95% CI `r round(ci_lower[2],2)` to `r round(ci_upper[2],2)`) is clearly positive throughout its confidence interval, so this data set shows a robust association between being recorded as female and a higher chance of survival, after accounting for age group. The `adult` effect's confidence interval (`r round(ci_lower[3],2)` to `r round(ci_upper[3],2)`) straddles zero, so on its own this analysis cannot rule out no association between age group and survival once sex is accounted for; part (c) tests the sex effect formally.
+
+## (c) Likelihood-ratio test
+
+**Hypotheses.** We test whether `female` contributes to the model once `adult` is already included:
+$$
+H_0:\beta_1=0 \quad(\text{reduced model: } \Phi^{-1}(p_i)=\beta_0+\beta_2\texttt{adult}_i)
+$$
+$$
+H_1:\beta_1\neq 0 \quad(\text{full model: } \Phi^{-1}(p_i)=\beta_0+\beta_1\texttt{female}_i+\beta_2\texttt{adult}_i)
+$$
+
+**Test statistic.** Fit the reduced model (again from first principles, by maximising the same form of log-likelihood with the `female` term removed):
+
+```{r}
+#| label: q1-lrt
+#| echo: true
+
+neg_loglik_reduced <- function(beta2, y, m, adult) {
+  eta <- beta2[1] + beta2[2] * adult
+  p <- pnorm(eta)
+  p <- pmin(pmax(p, 1e-12), 1 - 1e-12)
+  -sum(y * log(p) + (m - y) * log(1 - p))
+}
+
+fit1_reduced <- optim(
+  par = c(0, 0), fn = neg_loglik_reduced,
+  y = y, m = m, adult = titanic_grouped$adult,
+  method = "BFGS", control = list(reltol = 1e-12, maxit = 5000)
+)
+fit1_reduced$convergence
+fit1_reduced$par
+
+loglik_full <- -fit1$value
+loglik_reduced <- -fit1_reduced$value
+LR_stat <- 2 * (loglik_full - loglik_reduced)
+LR_df <- 1
+LR_pvalue <- 1 - pchisq(LR_stat, df = LR_df)
+
+c(loglik_full = loglik_full, loglik_reduced = loglik_reduced,
+  LR_stat = LR_stat, df = LR_df, p_value = LR_pvalue)
+```
+
+Under $H_0$, the likelihood-ratio statistic $\mathrm{LR}=2\big(\ell_{\text{full}}-\ell_{\text{reduced}}\big)$ is asymptotically $\chi^2_{1}$ distributed (1 degree of freedom, the difference in the number of free parameters between the two nested models).
+
+**Result.** $\mathrm{LR}=`r round(LR_stat,2)`$ on 1 degree of freedom, $p=`r formatC(LR_pvalue, format="e", digits=2)`$.
+
+**Conclusion in context.** The p-value is far below the 5% significance threshold, so we reject $H_0$. After accounting for age group, there is very strong statistical evidence that sex is associated with the recorded survival outcome among third-class passengers in this data set. This is a statement about an association in the historical records analysed here; it is not a claim about any individual passenger's decisions, behaviour, or about the fairness or policies of the evacuation, which would require historical and qualitative evidence beyond this statistical model.
+
+## (d) Estimated survival probability for a third-class adult female
+
+For a third-class adult female, $\texttt{female}=1$ and $\texttt{adult}=1$, so the linear predictor is $\hat\eta=\hat\beta_0+\hat\beta_1+\hat\beta_2=a^\top\hat\beta$ with $a=(1,1,1)^\top$. Its estimated variance follows from the delta method applied to a linear combination of $\hat\beta$:
+$$
+\widehat{\operatorname{Var}}(\hat\eta)=a^\top\,\widehat{\operatorname{Var}}(\hat\beta)\,a .
+$$
+The confidence interval is built on the linear-predictor ($\eta$) scale, where the normal approximation from maximum-likelihood theory is most reliable, and only then transformed to the probability scale using $\Phi$ (which is monotonic, so endpoints map to endpoints):
+
+```{r}
+#| label: q1-predict
+#| echo: true
+
+a_vec <- c(1, 1, 1)  # (Intercept, female = 1, adult = 1)
+eta_hat_af <- as.numeric(a_vec %*% beta_hat)
+var_eta_af <- as.numeric(t(a_vec) %*% vcov_analytic %*% a_vec)
+se_eta_af <- sqrt(var_eta_af)
+
+eta_lo <- eta_hat_af - z975 * se_eta_af
+eta_hi <- eta_hat_af + z975 * se_eta_af
+
+p_hat_af <- pnorm(eta_hat_af)
+p_lo_af <- pnorm(eta_lo)
+p_hi_af <- pnorm(eta_hi)
+
+data.frame(
+  quantity = c("linear predictor (eta)", "survival probability"),
+  estimate = round(c(eta_hat_af, p_hat_af), 4),
+  ci_lower = round(c(eta_lo, p_lo_af), 4),
+  ci_upper = round(c(eta_hi, p_hi_af), 4)
+)
+```
+
+```{r}
+#| label: fig-q1-groups
+#| echo: true
+#| fig-cap: "Observed and model-fitted survival probability by sex and age group, third class. Bars show the raw sample proportion in each group; points with whiskers show the model's fitted probability and 95% confidence interval on that scale, computed the same way as for the adult-female group above."
+
+eta_hat_all <- as.vector(X %*% beta_hat)
+var_eta_all <- sapply(seq_len(nrow(X)), function(i) {
+  xi <- X[i, ]
+  as.numeric(t(xi) %*% vcov_analytic %*% xi)
+})
+se_eta_all <- sqrt(var_eta_all)
+fitted_p <- pnorm(eta_hat_all)
+fitted_lo <- pnorm(eta_hat_all - z975 * se_eta_all)
+fitted_hi <- pnorm(eta_hat_all + z975 * se_eta_all)
+observed_p <- y / m
+
+group_labels <- c("Male, Child", "Female, Child", "Male, Adult", "Female, Adult")
+
+bar_x <- barplot(
+  observed_p, names.arg = group_labels, ylim = c(0, 1),
+  col = "grey85", border = "grey40",
+  ylab = "Survival probability", xlab = "Group (third class)",
+  main = "Third-class survival: observed proportions vs. fitted probit model"
+)
+points(bar_x, fitted_p, pch = 19, col = "firebrick", cex = 1.3)
+arrows(bar_x, fitted_lo, bar_x, fitted_hi, angle = 90, code = 3,
+       length = 0.06, col = "firebrick", lwd = 2)
+legend("topleft", legend = c("Observed proportion", "Model fit (95% CI)"),
+       fill = c("grey85", NA), border = c("grey40", NA),
+       pch = c(NA, 19), col = c(NA, "firebrick"), bty = "n")
+```
+
+**Calculation summary.** The estimated linear predictor for an adult female in third class is $\hat\eta=`r round(eta_hat_af,4)`$, with standard error $`r round(se_eta_af,4)`$, giving a 95% CI on the linear-predictor scale of ($`r round(eta_lo,4)`$, $`r round(eta_hi,4)`$). Transforming with $\Phi$ gives an estimated survival probability of $\hat p=\Phi(`r round(eta_hat_af,4)`)=`r round(p_hat_af,4)`$, with 95% CI ($\Phi(`r round(eta_lo,4)`)$, $\Phi(`r round(eta_hi,4)`)$) $=$ ($`r round(p_lo_af,4)`$, $`r round(p_hi_af,4)`$).
+
+**Answer for the maritime research manager.** Among third-class passengers in these records, the model estimates that an adult female had roughly a **`r paste0(round(100*p_hat_af,1),"%")` chance of survival**, with a 95% confidence interval of about **`r paste0(round(100*p_lo_af,1),"%")` to `r paste0(round(100*p_hi_af,1),"%")`**. In other words, the data are consistent with anywhere from a little over one-third to a little over one-half of adult female third-class passengers surviving; the interval is fairly wide because it is based on 165 adult female third-class passengers, of whom 76 survived (@fig-q1-groups). This is a description of the historical pattern in these particular records — it should not be read as a statement about what determined any individual passenger's fate, nor as an assessment of the adequacy of the evacuation procedures.
+
+
+# Case 2: Penguin sex and body mass (logistic regression)
+
+**Brief.** An Antarctic field team wants to understand the association between body mass and recorded sex in adult penguins. The manager asks: *how do the odds of a male record change when body mass increases by 500 g, and how certain is that estimate?* The aim is to describe a pattern, not to claim that body mass causes sex.
+
+**Data.** The `penguins` data from the `palmerpenguins` package: 344 Adélie, Chinstrap and Gentoo penguins measured near Palmer Station, Antarctica, 2007–2009. The model is a binomial GLM with logit link, `male ~ body_mass_g`.
+
+## (a) Change in log-odds for a 500 g increase in body mass
+
+**Data preparation**
+
+```{r}
+#| label: q2-data-prep
+#| echo: true
+
+data(penguins)
+penguin_analysis <- na.omit(
+  penguins[c("sex", "body_mass_g")]
+)
+penguin_analysis$male <- as.integer(penguin_analysis$sex == "male")
+str(penguin_analysis)
+```
+
+**Model.** With $p(x)=\Pr(\texttt{male}=1\mid \texttt{body\_mass\_g}=x)$, the fitted logistic regression is
+$$
+\operatorname{logit}\big(p(x)\big)=\log\left(\frac{p(x)}{1-p(x)}\right)=\beta_0+\beta_1 x .
+$$
+
+**Derivation of the 500 g effect.** The log-odds at body mass $x+500$ minus the log-odds at body mass $x$ is
+$$
+\operatorname{logit}\big(p(x+500)\big)-\operatorname{logit}\big(p(x)\big)
+=\big[\beta_0+\beta_1(x+500)\big]-\big[\beta_0+\beta_1x\big]
+=500\,\beta_1 .
+$$
+So, because the logit link is linear in $x$, the change in log-odds associated with a 500 g increase in body mass is simply $500\hat\beta_1$, regardless of the starting value of $x$.
+
+**Fitting the model and estimating the effect**
+
+```{r}
+#| label: q2-fit
+#| echo: true
+
+fit2 <- glm(male ~ body_mass_g, data = penguin_analysis,
+            family = binomial(link = "logit"))
+summary(fit2)
+
+beta1_hat <- coef(fit2)["body_mass_g"]
+delta_logodds_500 <- 500 * beta1_hat
+delta_logodds_500
+```
+
+The fitted body-mass coefficient is $\hat\beta_1=`r formatC(beta1_hat, format="f", digits=6)`$ log-odds per gram, so the estimated change in log-odds for a 500 g increase in body mass is
+$$
+500\hat\beta_1=`r round(delta_logodds_500,4)` .
+$$
+
+## (b) Confidence interval, odds ratio, and interpretation
+
+**Confidence interval for the log-odds change.** The standard error of $500\hat\beta_1$ is $500\,\mathrm{SE}(\hat\beta_1)$ (a constant multiple of a normally-distributed estimator), so a 95% Wald interval is $500\hat\beta_1 \pm 1.96\times500\,\mathrm{SE}(\hat\beta_1)$.
+
+```{r}
+#| label: q2-ci
+#| echo: true
+
+se_beta1 <- summary(fit2)$coefficients["body_mass_g", "Std. Error"]
+se_delta_500 <- 500 * se_beta1
+
+ci_logodds_lower <- delta_logodds_500 - z975 * se_delta_500
+ci_logodds_upper <- delta_logodds_500 + z975 * se_delta_500
+
+or_500 <- exp(delta_logodds_500)
+or_ci_lower <- exp(ci_logodds_lower)
+or_ci_upper <- exp(ci_logodds_upper)
+
+q2_table <- data.frame(
+  quantity = c("Change in log-odds (per 500 g)", "Odds ratio (per 500 g)"),
+  estimate = c(round(delta_logodds_500, 4), round(or_500, 3)),
+  ci_lower = c(round(ci_logodds_lower, 4), round(or_ci_lower, 3)),
+  ci_upper = c(round(ci_logodds_upper, 4), round(or_ci_upper, 3))
+)
+q2_table
+```
+
+**Table 2.** Estimated change in log-odds of a male record for a 500 g increase in body mass, with the corresponding odds ratio, and 95% confidence intervals.
+
+```{r}
+#| label: fig-q2-curve
+#| echo: true
+#| fig-cap: "Fitted probability of a male record as a function of body mass, with observed records (jittered vertically to reduce overplotting)."
+
+mass_grid <- seq(min(penguin_analysis$body_mass_g),
+                  max(penguin_analysis$body_mass_g), length.out = 200)
+pred_link <- predict(fit2, newdata = data.frame(body_mass_g = mass_grid),
+                      type = "link", se.fit = TRUE)
+pred_p <- plogis(pred_link$fit)
+pred_lo <- plogis(pred_link$fit - z975 * pred_link$se.fit)
+pred_hi <- plogis(pred_link$fit + z975 * pred_link$se.fit)
+
+plot(mass_grid, pred_p, type = "n", ylim = c(0, 1),
+     xlab = "Body mass (g)", ylab = "Fitted P(male)",
+     main = "Logistic model: P(male) vs body mass")
+polygon(c(mass_grid, rev(mass_grid)), c(pred_lo, rev(pred_hi)),
+        col = adjustcolor("steelblue", alpha.f = 0.25), border = NA)
+lines(mass_grid, pred_p, col = "steelblue", lwd = 2)
+set.seed(1)
+jitter_y <- penguin_analysis$male + runif(nrow(penguin_analysis), -0.03, 0.03)
+points(penguin_analysis$body_mass_g, jitter_y, pch = 16,
+       col = adjustcolor("grey30", alpha.f = 0.35), cex = 0.6)
+legend("bottomright", legend = c("Fitted P(male) (95% CI band)", "Observed records (jittered)"),
+       lty = c(1, NA), pch = c(NA, 16), col = c("steelblue", "grey30"), bty = "n")
+```
+
+**Answer for the field ecology manager.** The estimated odds ratio for a 500 g increase in body mass is $\exp(500\hat\beta_1)=`r round(or_500,2)`$, with a 95% confidence interval of ($`r round(or_ci_lower,2)`$, $`r round(or_ci_upper,2)`$). In plain terms: in this data set, penguins that are 500 g heavier have, on average, about **`r round(or_500,2)` times higher odds** of being recorded as male (a `r paste0(round(100*(or_500-1),0),"%")` increase in odds), and we can be 95% confident the true multiplicative change lies somewhere between about `r round(or_ci_lower,2)` and `r round(or_ci_upper,2)`-fold. Because the whole interval is above 1, this is a statistically significant, positive association between body mass and being recorded as male in this sample.
+
+**Limitation.** This model uses body mass alone and ignores species. The three species in the data set differ substantially in typical body size (Gentoo penguins, for example, are considerably heavier on average than Adélie or Chinstrap penguins), so species is a plausible confounder: some of the apparent mass-sex association may reflect which species were measured, rather than a within-species relationship between mass and sex. As the brief notes, the model also describes an association in these observational records; it does not imply that body mass determines sex, and it should not be used on its own to classify an individual penguin's sex with confidence, since the fitted curve in @fig-q2-curve shows substantial overlap between the two sexes across the observed range of body mass.
+
+
+# Case 3: Methodology note: the gamma distribution as a GLM family
+
+**Brief.** A technical reviewer asked for the derivation showing that the gamma distribution, with shape $\nu>0$ and rate $\lambda>0$,
+$$
+f(y;\nu,\lambda)=\frac{\lambda^\nu}{\Gamma(\nu)}y^{\nu-1}e^{-\lambda y},\qquad y>0,
+$$
+belongs to the exponential dispersion family $f(y;\theta,\phi)=\exp\left\{\frac{y\theta-b(\theta)}{a(\phi)}+c(y,\phi)\right\}$, together with its mean, variance, canonical link and variance function. The note supports the use of gamma GLMs for positive, right-skewed responses such as ozone concentrations.
+
+## (a) Exponential-family form
+
+This section is a derivation and involves no data or R code; the working is presented directly in mathematical notation.
+
+**Step 1: take logs.**
+$$
+\log f(y;\nu,\lambda)=\nu\log\lambda-\log\Gamma(\nu)+(\nu-1)\log y-\lambda y .
+$$
+
+**Step 2: reparametrise by the mean.** For $Y\sim\operatorname{Gamma}(\nu,\lambda)$ the mean is $\mu=\nu/\lambda$, so $\lambda=\nu/\mu$. Substituting,
+$$
+\log f=\nu\log\!\left(\frac{\nu}{\mu}\right)-\log\Gamma(\nu)+(\nu-1)\log y-\frac{\nu}{\mu}y
+=\nu\log\nu-\log\Gamma(\nu)+(\nu-1)\log y \;+\;\nu\left(-\frac{y}{\mu}-\log\mu\right).
+$$
+
+**Step 3: introduce the dispersion parameter $\phi=1/\nu$.** Setting $\nu=1/\phi$, the term involving both $y$ and $\mu$ becomes
+$$
+\nu\left(-\frac{y}{\mu}-\log\mu\right)=\frac{1}{\phi}\left(-\frac{y}{\mu}-\log\mu\right)
+=\frac{y\theta-b(\theta)}{\phi},
+$$
+where we define the **natural parameter**
+$$
+\theta=-\frac{1}{\mu}\qquad(\theta<0,\text{ since }\mu>0),
+$$
+so that $y\theta=-y/\mu$, and matching the remaining term requires $-b(\theta)=-\log\mu$, i.e. $b(\theta)=\log\mu=\log(-1/\theta)=-\log(-\theta)$.
+
+**Step 4: collect the remaining terms into $c(y,\phi)$.** The terms not involving $\mu$ (equivalently, not involving $\theta$) become, with $\nu=1/\phi$,
+$$
+c(y,\phi)=\nu\log\nu-\log\Gamma(\nu)+(\nu-1)\log y
+=\frac{1}{\phi}\log\!\left(\frac{1}{\phi}\right)-\log\Gamma\!\left(\frac{1}{\phi}\right)+\left(\frac{1}{\phi}-1\right)\log y .
+$$
+
+**Result.** The gamma density is exactly of exponential-dispersion-family form
+$$
+f(y;\theta,\phi)=\exp\left\{\frac{y\theta-b(\theta)}{a(\phi)}+c(y,\phi)\right\},
+$$
+with
+$$
+\theta=-\frac1\mu,\qquad
+b(\theta)=-\log(-\theta),\qquad
+a(\phi)=\phi=\frac1\nu,\qquad
+c(y,\phi)=\frac1\phi\log\frac1\phi-\log\Gamma\!\left(\frac1\phi\right)+\left(\frac1\phi-1\right)\log y .
+$$
+**Parameter space:** $\theta\in(-\infty,0)$ (equivalently $\mu>0$), $\phi>0$ (equivalently $\nu>0$), and support $y>0$.
+
+## (b) Canonical link and variance function
+
+**Mean.** For any exponential-dispersion-family model, $E(Y)=b'(\theta)$. Differentiating $b(\theta)=-\log(-\theta)$,
+$$
+b'(\theta)=-\frac{1}{-\theta}\times(-1)=-\frac{1}{\theta} .
+$$
+Substituting $\theta=-1/\mu$ gives
+$$
+E(Y)=-\frac{1}{-1/\mu}=\mu ,
+$$
+confirming the reparametrisation was consistent: $\mu$ is indeed the mean.
+
+**Variance.** For the exponential-dispersion family, $\operatorname{Var}(Y)=a(\phi)\,b''(\theta)$. Differentiating $b'(\theta)=-1/\theta$,
+$$
+b''(\theta)=\frac{1}{\theta^2}.
+$$
+With $\theta=-1/\mu$, $\theta^2=1/\mu^2$, so $b''(\theta)=\mu^2$, and therefore
+$$
+\operatorname{Var}(Y)=a(\phi)\,b''(\theta)=\phi\,\mu^2=\frac{\mu^2}{\nu}.
+$$
+(This matches the well-known direct result $\operatorname{Var}(Y)=\nu/\lambda^2=\mu^2/\nu$ for the gamma distribution, since $\lambda=\nu/\mu$.)
+
+**Canonical link.** The canonical link is the function $g$ for which the natural parameter itself is used as the linear predictor, i.e. $\theta(\mu)=g(\mu)$. From Step 3 above,
+$$
+g(\mu)=\theta(\mu)=-\frac{1}{\mu}.
+$$
+This is the **negative-inverse link**. (Because any strictly monotone rescaling of $\theta$ is equally "canonical" for the purposes of exponential-family theory, some software — including R's `Gamma()` family — instead reports the *inverse* link $\eta=1/\mu$, which differs only by an overall sign convention on the linear predictor and its coefficients; the two are equivalent representations of the same canonical structure.)
+
+**Variance function.** By definition $\operatorname{Var}(Y)=a(\phi)V(\mu)$. Since $a(\phi)=\phi$ and $\operatorname{Var}(Y)=\phi\mu^2$ from above,
+$$
+V(\mu)=\mu^2 .
+$$
+
