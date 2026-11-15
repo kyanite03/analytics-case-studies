@@ -1,0 +1,40 @@
+# Deploys the Shinylive static build of the energy emissions dashboard to Aliyun OSS.
+# Mirrors the CDEG pipeline: GitHub Actions -> ossutil -> Aliyun OSS Hong Kong -> Cloudflare.
+name: Deploy dashboard to Aliyun OSS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '01-energy-emissions-dashboard/site/**'
+  workflow_dispatch:        # manual "Run workflow" button in the Actions tab
+
+concurrency:
+  group: deploy-dashboard
+  cancel-in-progress: true  # if two pushes land close together, only the latest deploys
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up ossutil
+        uses: yizhoumo/setup-ossutil@v2
+        with:
+          endpoint: oss-cn-hongkong.aliyuncs.com
+          access-key-id: ${{ secrets.ALIYUN_DASHBOARD_ACCESS_KEY_ID }}
+          access-key-secret: ${{ secrets.ALIYUN_DASHBOARD_ACCESS_KEY_SECRET }}
+
+      - name: Upload site to OSS
+        run: ossutil cp -r -f 01-energy-emissions-dashboard/site/ oss://dashboard-ksmarsh/
+
+      - name: Set required MIME types (webR needs .wasm as application/wasm)
+        run: |
+          ossutil set-meta oss://dashboard-ksmarsh/ Content-Type:application/wasm        --include "*.wasm" -u -r -f
+          ossutil set-meta oss://dashboard-ksmarsh/ Content-Type:application/javascript --include "*.js"   -u -r -f
+          ossutil set-meta oss://dashboard-ksmarsh/ Content-Type:application/json       --include "*.json" -u -r -f
